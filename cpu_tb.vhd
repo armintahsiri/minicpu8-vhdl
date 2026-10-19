@@ -1,9 +1,15 @@
 -- cpu_tb.vhd : *** TESTBENCH ONLY - NOT SYNTHESIZABLE ***
--- System-level tests: two cpu_top instances, each running one program.
---   DUT 1: sum1to10      -> r1 must equal 55 (0x37) after HALT
---   DUT 2: shift_branch  -> r2=12 r3=6 r4=10 r5=13 r6=0, flags ZNCV=0000
--- A per-DUT cycle budget stops broken programs from hanging the simulation,
--- plus a global wall-clock watchdog.
+-- System-level tests: one cpu_top instance per program, all running
+-- concurrently.  Final registers, flags, PC and data RAM are asserted against
+-- values pre-computed with tools/isa_sim.py.
+--
+-- Programs (index):
+--   0 sum1to10          1 shift_branch       2 array_sum
+--   3 find_max          4 call_ret           5 unsigned_vs_signed
+--   6 pc_wrap           7 r0_guard
+--
+-- Each program has its own cycle budget; a global wall-clock watchdog stops a
+-- broken simulation.
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
@@ -14,172 +20,274 @@ entity cpu_tb is
 end entity cpu_tb;
 
 architecture sim of cpu_tb is
+  type halted_vec_t  is array (natural range <>) of std_logic;
+  type pc_vec_t      is array (natural range <>) of byte_t;
+  type flags_vec_t   is array (natural range <>) of std_logic_vector(3 downto 0);
+  type regs_vec_t    is array (natural range <>) of regfile_t;
+  type ram_vec_t     is array (natural range <>) of ram_t;
+  type cycle_vec_t   is array (natural range <>) of natural;
+  type bool_vec_t    is array (natural range <>) of boolean;
+
   signal clk : std_logic := '0';
   signal rst : std_logic := '1';
 
-  signal halted1 : std_logic;
-  signal pc1     : byte_t;
-  signal fl1     : std_logic_vector(3 downto 0);
-  signal regs1   : regfile_t;
-  signal ram1    : ram_t;
+  signal halted_v : halted_vec_t(0 to 7);
+  signal pc_v     : pc_vec_t(0 to 7);
+  signal flags_v  : flags_vec_t(0 to 7);
+  signal regs_v   : regs_vec_t(0 to 7);
+  signal ram_v    : ram_vec_t(0 to 7);
 
-  signal halted2 : std_logic;
-  signal pc2     : byte_t;
-  signal fl2     : std_logic_vector(3 downto 0);
-  signal regs2   : regfile_t;
-  signal ram2    : ram_t;
+  constant CYCLE_BUDGET : cycle_vec_t(0 to 7) :=
+    (100, 50, 200, 150, 600, 50, 20, 50);
+  constant EXPECTED_CYCLES : cycle_vec_t(0 to 7) :=
+    (33, 8, 54, 32, 179, 10, 4, 7);
+  constant MAX_CYCLES : natural := 600;
 
-  constant EMPTY_RAM : ram_init_t(0 to 0) := (0 => x"00");
-
-  signal done1, done2 : boolean := false;
-
-  constant MAX_CYCLES : natural := 2000;
+  signal done : boolean := false;
 begin
 
   clk <= not clk after 5 ns;
 
-  dut1 : entity work.cpu_top
+  dut0 : entity work.cpu_top
     generic map (PROGRAM => work.sum1to10_rom.PROG,
                  RAM_INIT => work.sum1to10_ram.INIT)
-    port map (clk => clk, rst => rst, halted => halted1,
-              dbg_pc => pc1, dbg_flags => fl1, dbg_regs => regs1,
-              dbg_ram => ram1);
+    port map (clk => clk, rst => rst, halted => halted_v(0),
+              dbg_pc => pc_v(0), dbg_flags => flags_v(0),
+              dbg_regs => regs_v(0), dbg_ram => ram_v(0));
 
-  dut2 : entity work.cpu_top
+  dut1 : entity work.cpu_top
     generic map (PROGRAM => work.shift_branch_rom.PROG,
                  RAM_INIT => work.shift_branch_ram.INIT)
-    port map (clk => clk, rst => rst, halted => halted2,
-              dbg_pc => pc2, dbg_flags => fl2, dbg_regs => regs2,
-              dbg_ram => ram2);
+    port map (clk => clk, rst => rst, halted => halted_v(1),
+              dbg_pc => pc_v(1), dbg_flags => flags_v(1),
+              dbg_regs => regs_v(1), dbg_ram => ram_v(1));
 
-  sum_check : process
-    variable errors  : natural := 0;
-    variable checks  : natural := 0;
-    variable cycles  : natural := 0;
+  dut2 : entity work.cpu_top
+    generic map (PROGRAM => work.array_sum_rom.PROG,
+                 RAM_INIT => work.array_sum_ram.INIT)
+    port map (clk => clk, rst => rst, halted => halted_v(2),
+              dbg_pc => pc_v(2), dbg_flags => flags_v(2),
+              dbg_regs => regs_v(2), dbg_ram => ram_v(2));
 
-    procedure expect (name : string; got, exp : byte_t) is
-    begin
-      checks := checks + 1;
-      if got /= exp then
-        errors := errors + 1;
-        report "SUM FAIL " & name & " got=0x" & to_hstring(got) &
-               " expected=0x" & to_hstring(exp) severity error;
-      end if;
-    end procedure;
-  begin
-    rst <= '1';
-    wait until rising_edge(clk);
-    wait until rising_edge(clk);
-    rst <= '0';
-    wait until rising_edge(clk);              -- instruction 0 executes on this edge
+  dut3 : entity work.cpu_top
+    generic map (PROGRAM => work.find_max_rom.PROG,
+                 RAM_INIT => work.find_max_ram.INIT)
+    port map (clk => clk, rst => rst, halted => halted_v(3),
+              dbg_pc => pc_v(3), dbg_flags => flags_v(3),
+              dbg_regs => regs_v(3), dbg_ram => ram_v(3));
 
-    while halted1 /= '1' loop
-      wait until rising_edge(clk);
-      cycles := cycles + 1;
-      exit when cycles > MAX_CYCLES;
-    end loop;
-    wait for 1 ns;
+  dut4 : entity work.cpu_top
+    generic map (PROGRAM => work.call_ret_rom.PROG,
+                 RAM_INIT => work.call_ret_ram.INIT)
+    port map (clk => clk, rst => rst, halted => halted_v(4),
+              dbg_pc => pc_v(4), dbg_flags => flags_v(4),
+              dbg_regs => regs_v(4), dbg_ram => ram_v(4));
 
-    if cycles > MAX_CYCLES then
-      report "SUM TEST: TIMEOUT after " & integer'image(MAX_CYCLES) &
-             " cycles (CPU did not halt)" severity failure;
-    end if;
+  dut5 : entity work.cpu_top
+    generic map (PROGRAM => work.unsigned_vs_signed_rom.PROG,
+                 RAM_INIT => work.unsigned_vs_signed_ram.INIT)
+    port map (clk => clk, rst => rst, halted => halted_v(5),
+              dbg_pc => pc_v(5), dbg_flags => flags_v(5),
+              dbg_regs => regs_v(5), dbg_ram => ram_v(5));
 
-    -- sum of 1..10 = 55 = 0x37
-    expect("r1 = 55",       regs1(1), std_logic_vector(to_unsigned(55, 8)));
-    expect("halt address",  pc1, std_logic_vector(to_unsigned(6, 8)));
-    expect("i ended at 11", regs1(2), std_logic_vector(to_unsigned(11, 8)));
-    checks := checks + 1;
-    if halted1 /= '1' then
-      errors := errors + 1;
-      report "SUM FAIL halted is not '1'" severity error;
-    end if;
+  dut6 : entity work.cpu_top
+    generic map (PROGRAM => work.pc_wrap_rom.PROG,
+                 RAM_INIT => work.pc_wrap_ram.INIT)
+    port map (clk => clk, rst => rst, halted => halted_v(6),
+              dbg_pc => pc_v(6), dbg_flags => flags_v(6),
+              dbg_regs => regs_v(6), dbg_ram => ram_v(6));
 
-    report "cpu_tb sum1to10: " & integer'image(checks) & " checks, " &
-           integer'image(errors) & " errors (halted after " &
-           integer'image(cycles) & " cycles)";
-    if errors = 0 then
-      report "SUM 1..10 TEST PASSED: r1 = 55";
-    else
-      report "SUM 1..10 TEST FAILED" severity failure;
-    end if;
-    done1 <= true;
-    wait;
-  end process;
+  dut7 : entity work.cpu_top
+    generic map (PROGRAM => work.r0_guard_rom.PROG,
+                 RAM_INIT => work.r0_guard_ram.INIT)
+    port map (clk => clk, rst => rst, halted => halted_v(7),
+              dbg_pc => pc_v(7), dbg_flags => flags_v(7),
+              dbg_regs => regs_v(7), dbg_ram => ram_v(7));
 
-  shift_check : process
+  stim : process
     variable errors : natural := 0;
     variable checks : natural := 0;
-    variable cycles : natural := 0;
+    variable cycles : cycle_vec_t(0 to 7) := (others => 0);
+    variable active : bool_vec_t(0 to 7) := (others => true);
+    variable all_halted : boolean;
 
-    procedure expect (name : string; got, exp : byte_t) is
+    procedure expect_byte (name : string; got, exp : byte_t) is
     begin
       checks := checks + 1;
       if got /= exp then
         errors := errors + 1;
-        report "SHIFT FAIL " & name & " got=0x" & to_hstring(got) &
+        report "FAIL " & name & " got=0x" & to_hstring(got) &
                " expected=0x" & to_hstring(exp) severity error;
+      end if;
+    end procedure;
+
+    procedure expect_flags (name : string; got : std_logic_vector(3 downto 0);
+                            exp : std_logic_vector(3 downto 0)) is
+    begin
+      checks := checks + 1;
+      if got /= exp then
+        errors := errors + 1;
+        report "FAIL " & name & " flags got=" & to_string(got) &
+               " expected=" & to_string(exp) severity error;
+      end if;
+    end procedure;
+
+    procedure expect_cycles (name : string; got, exp : natural) is
+    begin
+      checks := checks + 1;
+      if got /= exp then
+        errors := errors + 1;
+        report "FAIL " & name & " cycles got=" & integer'image(got) &
+               " expected=" & integer'image(exp) severity error;
       end if;
     end procedure;
   begin
     rst <= '1';
     wait until rising_edge(clk);
     wait until rising_edge(clk);
+    wait until falling_edge(clk);
+    -- While reset is asserted no architectural write may happen.  r0_guard's
+    -- first instruction is loadi r1,16; array_sum's first is loadi r2,16.
+    expect_byte("reset suppresses r0_guard r1", regs_v(7)(1), x"00");
+    expect_byte("reset suppresses array_sum r2", regs_v(2)(2), x"00");
     rst <= '0';
-    wait until rising_edge(clk);
 
-    while halted2 /= '1' loop
+    -- Count one cycle for every rising edge on which a program is still
+    -- running.  HALT is detected before it is "executed", matching isa_sim.
+    loop
+      all_halted := true;
+      for i in 0 to 7 loop
+        active(i) := halted_v(i) /= '1';
+        if active(i) then
+          all_halted := false;
+        end if;
+      end loop;
+      exit when all_halted;
+
       wait until rising_edge(clk);
-      cycles := cycles + 1;
-      exit when cycles > MAX_CYCLES;
+      for i in 0 to 7 loop
+        if active(i) then
+          cycles(i) := cycles(i) + 1;
+          if cycles(i) > CYCLE_BUDGET(i) then
+            report "PROGRAM " & integer'image(i) & " CYCLE BUDGET EXCEEDED"
+              severity failure;
+          end if;
+        end if;
+      end loop;
+      -- Let the combinational PC/ROM/control chain settle before testing
+      -- halted at the top of the loop; otherwise HALT can be observed one
+      -- delta too late and an extra (non-executed) cycle gets counted.
+      wait for 1 ns;
     end loop;
     wait for 1 ns;
 
-    if cycles > MAX_CYCLES then
-      report "SHIFT TEST: TIMEOUT after " & integer'image(MAX_CYCLES) &
-             " cycles (CPU did not halt)" severity failure;
-    end if;
+    for i in 0 to 7 loop
+      checks := checks + 1;
+      if halted_v(i) /= '1' then
+        errors := errors + 1;
+        report "FAIL program " & integer'image(i) & " did not halt"
+          severity error;
+      end if;
+      expect_cycles("program " & integer'image(i), cycles(i), EXPECTED_CYCLES(i));
+    end loop;
 
-    expect("r1 = 3",          regs2(1), std_logic_vector(to_unsigned(3, 8)));
-    expect("r2 = 3 shl 2",    regs2(2), std_logic_vector(to_unsigned(12, 8)));
-    expect("r3 = 12 shr 1",   regs2(3), std_logic_vector(to_unsigned(6, 8)));
-    expect("r4 = 12 xor 6",   regs2(4), std_logic_vector(to_unsigned(10, 8)));
-    expect("r5 = 10 add 3",   regs2(5), std_logic_vector(to_unsigned(13, 8)));
-    expect("r6 = 0 (beq taken, loadi skipped)",
-           regs2(6), x"00");
-    expect("halt address",    pc2, std_logic_vector(to_unsigned(9, 8)));
-    -- last flag-writing op was add r5,r4,r1 = 13 -> Z=0 N=0 C=0 V=0
-    checks := checks + 1;
-    if fl2 /= "0000" then
-      errors := errors + 1;
-      report "SHIFT FAIL flags ZNCV got=" & to_string(fl2) &
-             " expected=0000" severity error;
-    end if;
+    -- 0: sum1to10
+    expect_byte("sum r1=55", regs_v(0)(1), x"37");
+    expect_byte("sum i=11", regs_v(0)(2), x"0B");
+    expect_byte("sum pc=6", pc_v(0), x"06");
+    expect_flags("sum flags", flags_v(0), "0000");
 
-    report "cpu_tb shift_branch: " & integer'image(checks) & " checks, " &
-           integer'image(errors) & " errors (halted after " &
-           integer'image(cycles) & " cycles)";
+    -- 1: shift_branch
+    expect_byte("shift r1=3", regs_v(1)(1), x"03");
+    expect_byte("shift r2=12", regs_v(1)(2), x"0C");
+    expect_byte("shift r3=6", regs_v(1)(3), x"06");
+    expect_byte("shift r4=10", regs_v(1)(4), x"0A");
+    expect_byte("shift r5=13", regs_v(1)(5), x"0D");
+    expect_byte("shift r6=0", regs_v(1)(6), x"00");
+    expect_byte("shift pc=9", pc_v(1), x"09");
+    expect_flags("shift flags", flags_v(1), "0000");
+
+    -- 2: array_sum
+    expect_byte("array_sum r1=55", regs_v(2)(1), x"37");
+    expect_byte("array_sum pointer=26", regs_v(2)(2), x"1A");
+    expect_byte("array_sum count=0", regs_v(2)(3), x"00");
+    expect_byte("array_sum last=10", regs_v(2)(5), x"0A");
+    expect_byte("array_sum RAM[26]=55", ram_v(2)(26), x"37");
+    expect_byte("array_sum RAM[16]=1", ram_v(2)(16), x"01");
+    expect_byte("array_sum pc=9", pc_v(2), x"09");
+    expect_flags("array_sum flags", flags_v(2), "1010");
+
+    -- 3: find_max (signed)
+    expect_byte("find_max max=127", regs_v(3)(1), x"7F");
+    expect_byte("find_max pointer=21", regs_v(3)(2), x"15");
+    expect_byte("find_max last=127", regs_v(3)(5), x"7F");
+    expect_byte("find_max RAM[21]=127", ram_v(3)(21), x"7F");
+    expect_byte("find_max RAM[16]=-5", ram_v(3)(16), x"FB");
+    expect_byte("find_max RAM[19]=-100", ram_v(3)(19), x"9C");
+    expect_byte("find_max pc=13", pc_v(3), x"0D");
+    expect_flags("find_max flags", flags_v(3), "1010");
+
+    -- 4: call_ret (two calls + nested call with R7 saved in RAM[20])
+    expect_byte("call_ret 3*5=15", ram_v(4)(16), x"0F");
+    expect_byte("call_ret 7*6=42", ram_v(4)(17), x"2A");
+    expect_byte("call_ret 9*9=81", ram_v(4)(18), x"51");
+    expect_byte("call_ret saved link=10", ram_v(4)(20), x"0A");
+    expect_byte("call_ret r7=10", regs_v(4)(7), x"0A");
+    expect_byte("call_ret r3=81", regs_v(4)(3), x"51");
+    expect_byte("call_ret pc=11", pc_v(4), x"0B");
+    expect_flags("call_ret flags", flags_v(4), "0000");
+
+    -- 5: unsigned_vs_signed
+    expect_byte("unsigned r3=2 (BHS)", regs_v(5)(3), x"02");
+    expect_byte("signed r4=3 (BLT)", regs_v(5)(4), x"03");
+    expect_byte("unsigned r1=0xFE", regs_v(5)(1), x"FE");
+    expect_byte("unsigned pc=18", pc_v(5), x"12");
+    expect_flags("unsigned_vs_signed flags", flags_v(5), "0110");
+
+    -- 6: pc_wrap
+    expect_byte("pc_wrap r1=1", regs_v(6)(1), x"01");
+    expect_byte("pc_wrap r2=31", regs_v(6)(2), x"1F");
+    expect_byte("pc_wrap pc=2", pc_v(6), x"02");
+    expect_flags("pc_wrap flags", flags_v(6), "0000");
+
+    -- 7: r0_guard
+    expect_byte("r0_guard r0=0", regs_v(7)(0), x"00");
+    expect_byte("r0_guard r1=16", regs_v(7)(1), x"10");
+    expect_byte("r0_guard r7=5", regs_v(7)(7), x"05");
+    expect_byte("r0_guard RAM[3]=0", ram_v(7)(3), x"00");
+    expect_byte("r0_guard RAM[16]=0x5A", ram_v(7)(16), x"5A");
+    expect_byte("r0_guard pc=5", pc_v(7), x"05");
+    expect_flags("r0_guard flags", flags_v(7), "0000");
+
+    report "cpu_tb:" & integer'image(checks) & " checks, " &
+           integer'image(errors) & " errors" &
+           " cycles: sum=" & integer'image(cycles(0)) &
+           " shift=" & integer'image(cycles(1)) &
+           " array_sum=" & integer'image(cycles(2)) &
+           " find_max=" & integer'image(cycles(3)) &
+           " call_ret=" & integer'image(cycles(4)) &
+           " unsigned=" & integer'image(cycles(5)) &
+           " pc_wrap=" & integer'image(cycles(6)) &
+           " r0_guard=" & integer'image(cycles(7));
     if errors = 0 then
-      report "SHIFT/BRANCH TEST PASSED";
+      report "CPU PROGRAMS TESTBENCH: ALL TESTS PASSED";
+      done <= true;
     else
-      report "SHIFT/BRANCH TEST FAILED" severity failure;
+      report "CPU PROGRAMS TESTBENCH: FAILED" severity failure;
     end if;
-    done2 <= true;
     wait;
   end process;
 
-  -- global watchdog: nothing may take longer than this wall-clock time
   watchdog : process
   begin
-    wait for 100 us;
-    report "GLOBAL WATCHDOG: simulation timed out" severity failure;
+    wait for 200 us;
+    report "CPU TESTBENCH: GLOBAL WATCHDOG TIMEOUT" severity failure;
     wait;
   end process;
 
   finisher : process
   begin
-    wait until done1 and done2;
-    report "CPU TESTBENCH: ALL TESTS PASSED";
+    wait until done;
     finish;
   end process;
 
