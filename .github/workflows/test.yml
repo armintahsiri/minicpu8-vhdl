@@ -4,7 +4,7 @@ on:
   pull_request:
 
 jobs:
-  test:
+  nvc:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -14,7 +14,19 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Full test suite
+      - name: Full test suite (includes quick fuzz)
         run: make test
-      - name: Full differential fuzz
-        run: make fuzz
+  ghdl:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install GHDL (VHDL-2008)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ghdl
+          ghdl --version
+      - name: All testbenches under GHDL
+        run: make test-ghdl

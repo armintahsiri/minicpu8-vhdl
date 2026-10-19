@@ -2,4 +2,6 @@ work/
 build/
 __pycache__/
 *.pyc
+*.o
+e~*
 .DS_Store

@@ -1,10 +1,11 @@
-# MiniCPU-8 build/test with NVC (VHDL-2008)
-#   make test     -- consistency + assembler/simulator tests + changed VHDL + all simulations
-#   make programs -- regenerate *_rom.vhd (ROM + RAM packages) from programs/*.asm
-#   make fuzz     -- full random differential test (200 programs)
-#   make clean    -- remove the work library and generated files
+# MiniCPU-8 build/test with NVC and GHDL (VHDL-2008)
+#   make test      -- NVC: consistency + Python tests + changed VHDL + all simulations
+#   make test-ghdl -- GHDL: analyse and run every testbench (independent simulator)
+#   make programs  -- regenerate *_rom.vhd (ROM + RAM packages) from programs/*.asm
+#   make fuzz      -- full random differential test (200 programs)
+#   make clean     -- remove both work libraries and generated files
 #
-# The VHDL flow is dependency-aware: one stamp per analysed design unit, with
+# The NVC flow is dependency-aware: one stamp per analysed design unit, with
 # explicit source/unit prerequisites.  Only changed units (and their
 # dependents) are re-analysed, always in dependency order.
 
@@ -13,6 +14,15 @@ STD  := --std=08
 WORK := --work=work
 LIB  := work
 STAMPS := $(LIB)/.stamps
+
+# GHDL is a second, independent VHDL-2008 simulator.  Override on machines
+# where the binary is not on PATH: make GHDL=/path/to/ghdl test-ghdl
+GHDL      ?= ghdl
+GHDL_DIR  := build/ghdl
+GHDL_LOGS := build/ghdl-logs
+GHDL_FLAGS := --std=08 --workdir=$(GHDL_DIR)
+GHDL_ABS := $(shell command -v $(GHDL) 2>/dev/null || printf '%s' '$(GHDL)')
+GHDL_SOURCES = $(PKG_UNITS) $(SRC_UNITS) $(GEN_UNITS) $(TB_UNITS)
 
 PKG_UNITS := minicpu_pkg
 SRC_UNITS := alu register_file flag_reg pc instr_rom data_ram branch_cond \
@@ -32,7 +42,7 @@ RUN := alu_tb register_file_tb flag_reg_tb pc_tb instr_rom_tb data_ram_tb \
 
 ALL_STAMPS := $(addprefix $(STAMPS)/,$(addsuffix .stamp,$(PKG_UNITS) $(SRC_UNITS) $(GEN_UNITS) $(TB_UNITS)))
 
-.PHONY: all test asmtest simtest consistency programs quickfuzz fuzz clean
+.PHONY: all test test-ghdl asmtest simtest consistency programs quickfuzz fuzz clean
 
 all: test
 
@@ -112,6 +122,31 @@ test: asmtest simtest consistency programs $(ALL_STAMPS)
 	@python3 tools/fuzz.py --count 20 --seed 20251019 --dir build/fuzz_quick
 	@echo "==================================================="
 	@echo "ALL TESTBENCHES PASSED"
+	@echo "==================================================="
+
+# ---- GHDL: independent simulator, full VHDL-2008 analysis + simulation ---
+# Every unit is analysed in dependency order.  Each testbench must both exit
+# successfully and print its "ALL TESTS PASSED" banner; a failing testbench
+# prints its complete log and aborts make.
+test-ghdl: programs
+	@set -e; rm -rf $(GHDL_DIR) $(GHDL_LOGS); \
+	mkdir -p $(GHDL_DIR) $(GHDL_LOGS); \
+	for u in $(GHDL_SOURCES); do \
+	  echo "-- ghdl a $$u.vhd"; \
+	  $(GHDL) -a $(GHDL_FLAGS) $$u.vhd; \
+	done
+	@set -e; for tb in $(RUN); do \
+	  echo "=== ghdl run $$tb ==="; \
+	  ( cd $(GHDL_DIR) && $(GHDL_ABS) --elab-run --std=08 --workdir=. $$tb \
+	      --assert-level=error ) > $(GHDL_LOGS)/$$tb.log 2>&1 || { \
+	    echo "GHDL FAILED: $$tb"; cat $(GHDL_LOGS)/$$tb.log; exit 1; }; \
+	  grep -q "ALL TESTS PASSED" $(GHDL_LOGS)/$$tb.log || { \
+	    echo "GHDL: $$tb did not print its PASSED banner"; \
+	    cat $(GHDL_LOGS)/$$tb.log; exit 1; }; \
+	  grep -E "checks," $(GHDL_LOGS)/$$tb.log | tail -1 || true; \
+	done
+	@echo "==================================================="
+	@echo "ALL GHDL TESTBENCHES PASSED"
 	@echo "==================================================="
 
 clean:
