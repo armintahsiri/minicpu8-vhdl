@@ -13,7 +13,7 @@ architecture sim of instr_rom_tb is
   signal addr : byte_t := (others => '0');
   signal data : word_t;
 
-  constant PROG : rom_t(0 to 3) := (x"9203", x"6440", x"D000", x"C008");
+  constant PROG : rom_t(0 to 3) := (x"9203", x"6440", x"F001", x"C008");
 begin
 
   dut : entity work.instr_rom
@@ -39,11 +39,11 @@ begin
   begin
     expect("word 0",   0, x"9203");
     expect("word 1",   1, x"6440");
-    expect("word 2",   2, x"D000");
+    expect("word 2",   2, x"F001");
     expect("word 3",   3, x"C008");
-    expect("fill 4",   4, x"D000");   -- above the program: HALT filler
-    expect("fill 100", 100, x"D000");
-    expect("fill 255", 255, x"D000");
+    expect("fill 4",   4, x"F001");   -- above the program: HALT filler
+    expect("fill 100", 100, x"F001");
+    expect("fill 255", 255, x"F001");
     expect("re-read 0", 0, x"9203");  -- async read is repeatable
 
     report "instr_rom_tb: " & integer'image(checks) & " checks, " &

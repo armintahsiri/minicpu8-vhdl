@@ -22,31 +22,33 @@ architecture sim of cpu_edge_tb is
   signal pc_f, pc_b, pc_j, pc_e : byte_t;
   signal fl_f, fl_b, fl_j, fl_e : std_logic_vector(3 downto 0);
   signal rf_f, rf_b, rf_j, rf_e : regfile_t;
+  signal ram_f, ram_b, ram_j, ram_e : ram_t;
+  constant EMPTY_RAM : ram_init_t(0 to 0) := (0 => x"00");
 
   -- forward wrap: jmp 0xFD; at 0xFD loadi r1,1; at 0xFE beq r0,r0,+2 -> 0x01
   constant PROG_FWD : rom_t(0 to 255) := (
     0      => x"C0FD",   -- jmp 0xFD
     1      => x"941F",   -- loadi r2, 31   (landing point after the wrap)
-    2      => x"D000",   -- halt
+    2      => x"F001",   -- halt
     16#FD# => x"9201",   -- loadi r1, 1
     16#FE# => x"A002",   -- beq r0,r0,+2  -> (0xFE+1+2) mod 256 = 0x01
-    16#FF# => x"D000",   -- halt (skipped)
-    others => x"D000");
+    16#FF# => x"F001",   -- halt (skipped)
+    others => x"F001");
 
   -- backward wrap: at 0x00 beq r0,r0,-2 -> 0xFF; at 0xFF jmp 0x02
   constant PROG_BWD : rom_t(0 to 255) := (
     0      => x"A03E",   -- beq r0,r0,-2  -> (0+1-2) mod 256 = 0xFF
-    1      => x"D000",
+    1      => x"F001",
     2      => x"9607",   -- loadi r3, 7
-    3      => x"D000",   -- halt
+    3      => x"F001",   -- halt
     16#FF# => x"C002",   -- jmp 0x02
-    others => x"D000");
+    others => x"F001");
 
   -- jump to the last ROM word, which is HALT
   constant PROG_JMPFF : rom_t(0 to 255) := (
     0      => x"C0FF",   -- jmp 0xFF
-    16#FF# => x"D000",   -- halt
-    others => x"D000");
+    16#FF# => x"F001",   -- halt
+    others => x"F001");
 
   -- one-word program: execution runs off the end into the ROM's HALT filler
   constant PROG_END : rom_t(0 to 0) := (
@@ -59,24 +61,28 @@ begin
   clk <= not clk after 5 ns;
 
   dut_f : entity work.cpu_top
-    generic map (PROGRAM => PROG_FWD)
+    generic map (PROGRAM => PROG_FWD, RAM_INIT => EMPTY_RAM)
     port map (clk => clk, rst => rst, halted => halted_f,
-              dbg_pc => pc_f, dbg_flags => fl_f, dbg_regs => rf_f);
+              dbg_pc => pc_f, dbg_flags => fl_f, dbg_regs => rf_f,
+              dbg_ram => ram_f);
 
   dut_b : entity work.cpu_top
-    generic map (PROGRAM => PROG_BWD)
+    generic map (PROGRAM => PROG_BWD, RAM_INIT => EMPTY_RAM)
     port map (clk => clk, rst => rst, halted => halted_b,
-              dbg_pc => pc_b, dbg_flags => fl_b, dbg_regs => rf_b);
+              dbg_pc => pc_b, dbg_flags => fl_b, dbg_regs => rf_b,
+              dbg_ram => ram_b);
 
   dut_j : entity work.cpu_top
-    generic map (PROGRAM => PROG_JMPFF)
+    generic map (PROGRAM => PROG_JMPFF, RAM_INIT => EMPTY_RAM)
     port map (clk => clk, rst => rst, halted => halted_j,
-              dbg_pc => pc_j, dbg_flags => fl_j, dbg_regs => rf_j);
+              dbg_pc => pc_j, dbg_flags => fl_j, dbg_regs => rf_j,
+              dbg_ram => ram_j);
 
   dut_e : entity work.cpu_top
-    generic map (PROGRAM => PROG_END)
+    generic map (PROGRAM => PROG_END, RAM_INIT => EMPTY_RAM)
     port map (clk => clk, rst => rst, halted => halted_e,
-              dbg_pc => pc_e, dbg_flags => fl_e, dbg_regs => rf_e);
+              dbg_pc => pc_e, dbg_flags => fl_e, dbg_regs => rf_e,
+              dbg_ram => ram_e);
 
   stim : process
     variable errors : natural := 0;

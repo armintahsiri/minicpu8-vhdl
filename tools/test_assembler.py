@@ -159,7 +159,8 @@ src, pkg = assembler.to_vhdl(
 ok("vhdl rom package name", pkg == "array_sum_rom")
 ok("vhdl ram package emitted", "package array_sum_ram is" in src)
 ok("vhdl ram INIT emitted", "constant INIT : ram_init_t" in src)
-ok("vhdl ram values emitted", 'x"AA", x"FF", x"FF"' in src)
+ok("vhdl ram values emitted", '8 => x"AA"' in src and '9 => x"FF"' in src
+   and '10 => x"FF"' in src)
 res = assembler.assemble_with_data(".data 8, 1, 2, 3\nmain: nop")
 ok("data ram length", len(res.ram) == 11)
 ok("data ram contents", res.ram[8:11] == [1, 2, 3])

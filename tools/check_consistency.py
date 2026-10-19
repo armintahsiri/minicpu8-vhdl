@@ -164,7 +164,7 @@ ok("assembler source documents the rd-field trick",
 # BEQ/BNE comparand.
 cpu_norm = normalize(cpu_text)
 ok("cpu_top reads rs field [8:6] on register port 1",
-   "raddr1=>instr(8downto6)" in cpu_norm or "addr1<=instr(8downto6)" in cpu_norm)
+   "raddr1=>addr1" in cpu_norm and "elseinstr(8downto6)" in cpu_norm)
 ok("cpu_top uses control's rd2_from_rd to select bits [11:9]",
    "addr2<=instr(11downto9)whenrd2_from_rd='1'elseinstr(5downto3)" in cpu_norm)
 

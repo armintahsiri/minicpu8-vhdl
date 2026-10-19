@@ -401,16 +401,28 @@ def to_vhdl(words, asm_path, ram=None):
         "  constant PROG : rom_t := (",
     ]
     for i in range(0, len(words), 4):
-        chunk = ", ".join(f'x"{w:04X}"' for w in words[i:i + 4])
+        if len(words) == 1:
+            chunk = f'0 => x"{words[0]:04X}"'
+        else:
+            chunk = ", ".join(f'x"{w:04X}"' for w in words[i:i + 4])
         tail = "," if i + 4 < len(words) else ""
         lines.append(f"    {chunk}{tail}")
     lines += [");", f"end package {pkg};", ""]
+    # A VHDL context clause applies to the immediately following design unit,
+    # so the second package needs its own library/use clauses.
     lines += [
+        "library ieee;",
+        "use ieee.std_logic_1164.all;",
+        "use work.minicpu_pkg.all;",
+        "",
         f"package {ram_pkg} is",
         "  constant INIT : ram_init_t := (",
     ]
+    # Named associations resolve the element type of the unconstrained array
+    # even for a single element (a bare x"00" aggregate is ambiguous in VHDL).
     for i in range(0, len(ram), 8):
-        chunk = ", ".join(f'x"{b:02X}"' for b in ram[i:i + 8])
+        chunk = ", ".join(f'{j} => x"{ram[j]:02X}"'
+                          for j in range(i, min(i + 8, len(ram))))
         tail = "," if i + 8 < len(ram) else ""
         lines.append(f"    {chunk}{tail}")
     lines += [");", f"end package {ram_pkg};", ""]

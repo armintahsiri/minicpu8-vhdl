@@ -21,11 +21,15 @@ architecture sim of cpu_tb is
   signal pc1     : byte_t;
   signal fl1     : std_logic_vector(3 downto 0);
   signal regs1   : regfile_t;
+  signal ram1    : ram_t;
 
   signal halted2 : std_logic;
   signal pc2     : byte_t;
   signal fl2     : std_logic_vector(3 downto 0);
   signal regs2   : regfile_t;
+  signal ram2    : ram_t;
+
+  constant EMPTY_RAM : ram_init_t(0 to 0) := (0 => x"00");
 
   signal done1, done2 : boolean := false;
 
@@ -35,14 +39,18 @@ begin
   clk <= not clk after 5 ns;
 
   dut1 : entity work.cpu_top
-    generic map (PROGRAM => work.sum1to10_rom.PROG)
+    generic map (PROGRAM => work.sum1to10_rom.PROG,
+                 RAM_INIT => work.sum1to10_ram.INIT)
     port map (clk => clk, rst => rst, halted => halted1,
-              dbg_pc => pc1, dbg_flags => fl1, dbg_regs => regs1);
+              dbg_pc => pc1, dbg_flags => fl1, dbg_regs => regs1,
+              dbg_ram => ram1);
 
   dut2 : entity work.cpu_top
-    generic map (PROGRAM => work.shift_branch_rom.PROG)
+    generic map (PROGRAM => work.shift_branch_rom.PROG,
+                 RAM_INIT => work.shift_branch_ram.INIT)
     port map (clk => clk, rst => rst, halted => halted2,
-              dbg_pc => pc2, dbg_flags => fl2, dbg_regs => regs2);
+              dbg_pc => pc2, dbg_flags => fl2, dbg_regs => regs2,
+              dbg_ram => ram2);
 
   sum_check : process
     variable errors  : natural := 0;
@@ -79,7 +87,7 @@ begin
 
     -- sum of 1..10 = 55 = 0x37
     expect("r1 = 55",       regs1(1), std_logic_vector(to_unsigned(55, 8)));
-    expect("halt address",  pc1, std_logic_vector(to_unsigned(7, 8)));
+    expect("halt address",  pc1, std_logic_vector(to_unsigned(6, 8)));
     expect("i ended at 11", regs1(2), std_logic_vector(to_unsigned(11, 8)));
     checks := checks + 1;
     if halted1 /= '1' then
