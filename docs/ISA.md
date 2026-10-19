@@ -421,7 +421,7 @@ jmp 0x80            ; 1100 0000 10000000     = 0xC080
 | CMP | EXT func 3, SUB with `reg_write=0` | reuses the ALU and yields exactly SUB's Z/N/C/V; no second comparator or flag path |
 | Condition decode | combinational `branch_cond` (flags + 4-bit code) | keeps PC logic small and independently testable; exhaustive TB |
 | STORE data register | rd field bits 11:9 | the immediate occupies 5:0 and rs is the base; same proven trick as BEQ/BNE |
-| Data RAM | 256 x 8, async read, sync write | matches single-cycle timing; address arithmetic reuses the ALU's ADD |
+| Data RAM | 256 x 8 physical storage; 0x00..0xEF CPU-visible, 0xF0..0xFF MMIO | matches single-cycle timing; address arithmetic reuses the ALU's ADD; see section 8 |
 | RAM address wrap | `(rs + sext(imm6)) mod 256` | 8-bit address arithmetic is natural and cheap; documented |
 | RAM init | VHDL generic `RAM_INIT` from `.data` | same file-I/O-free flow as ROM; reproducible in any simulator |
 | CALL/RET link | R7, one level | no stack pointer/interrupt state in a single-cycle educational core; nested calls save R7 explicitly |
