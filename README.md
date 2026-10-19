@@ -1,3 +1,4 @@
+![CI](https://github.com/armintahsiri/minicpu8-vhdl/actions/workflows/test.yml/badge.svg)
 # MiniCPU-8
 
 An educational 8-bit **single-cycle CPU** written in VHDL-2008. Phase 2 adds
