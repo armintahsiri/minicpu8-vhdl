@@ -3,6 +3,11 @@
 #   make test-ghdl -- GHDL: analyse and run every testbench (independent simulator)
 #   make programs  -- regenerate *_rom.vhd (ROM + RAM packages) from programs/*.asm
 #   make fuzz      -- full random differential test (200 programs)
+#   make iofuzz    -- full I/O differential test (40 programs)
+#   make synth     -- Yosys/GHDL synthesis for HX8K (PROGRAM=hello)
+#   make pnr       -- nextpnr place-and-route + bitstream (iCE40HX8K-CT256)
+#   make post-synth -- simulate the Yosys/iCE40 netlist (Icarus) vs golden model
+#   make waves     -- GHDL VCDs: sum1to10 and hello first UART byte
 #   make clean     -- remove both work libraries and generated files
 #
 # The NVC flow is dependency-aware: one stamp per analysed design unit, with
@@ -23,6 +28,32 @@ GHDL_LOGS := build/ghdl-logs
 GHDL_FLAGS := --std=08 --workdir=$(GHDL_DIR)
 GHDL_ABS := $(shell command -v $(GHDL) 2>/dev/null || printf '%s' '$(GHDL)')
 GHDL_SOURCES = $(PKG_UNITS) $(SRC_UNITS) $(GEN_UNITS) $(TB_UNITS)
+
+# ---- FPGA / synthesis flow ------------------------------------------------
+PROGRAM   ?= hello
+YOSYS     ?= yosys
+GHDL_PLUGIN ?= ghdl
+GHDL_PREFIX ?=
+NEXTPNR   ?= nextpnr-ice40
+DEVICE    ?= hx8k
+PACKAGE   ?= ct256
+PCF       ?= constraints/hx8k_breakout.pcf
+FREQ      ?= 12
+SEED      ?= 1
+
+FPGA_BUILD  := build/synth
+FPGA_PKG    := $(FPGA_BUILD)/fpga_program.vhd
+SYNTH_JSON  := $(FPGA_BUILD)/fpga_top.json
+SYNTH_LOG   := $(FPGA_BUILD)/yosys.log
+PNR_LOG     := $(FPGA_BUILD)/nextpnr.log
+PNR_ASC     := $(FPGA_BUILD)/fpga_top.asc
+PNR_BIN     := $(FPGA_BUILD)/fpga_top.bin
+FPGA_VHDL   = $(PKG_UNITS:%=%.vhd) $(SRC_UNITS:%=%.vhd) \
+               $(PROGRAM)_rom.vhd $(FPGA_PKG) fpga_top.vhd
+
+ifneq ($(GHDL_PREFIX),)
+export GHDL_PREFIX
+endif
 
 PKG_UNITS := minicpu_pkg
 SRC_UNITS := alu register_file flag_reg pc instr_rom data_ram branch_cond \
@@ -46,7 +77,7 @@ RUN := alu_tb register_file_tb flag_reg_tb pc_tb instr_rom_tb data_ram_tb \
 
 ALL_STAMPS := $(addprefix $(STAMPS)/,$(addsuffix .stamp,$(PKG_UNITS) $(SRC_UNITS) $(GEN_UNITS) $(TB_UNITS)))
 
-.PHONY: all test test-ghdl asmtest simtest consistency programs quickfuzz fuzz ioquickfuzz iofuzz clean
+.PHONY: all test test-ghdl asmtest simtest consistency programs quickfuzz fuzz ioquickfuzz iofuzz synth pnr post-synth waves clean FORCE
 
 all: test
 
@@ -179,6 +210,60 @@ test-ghdl: programs
 	@echo "==================================================="
 	@echo "ALL GHDL TESTBENCHES PASSED"
 	@echo "==================================================="
+
+# ---- FPGA synthesis and place-and-route ----------------------------------
+# The generated package keeps the board top synthesizable without run-time
+# generic handling: the selected program's ROM/RAM package is referenced
+# directly. `make PROGRAM=hello synth`.
+$(FPGA_PKG): programs/$(PROGRAM).asm tools/assembler.py FORCE
+	@mkdir -p $(FPGA_BUILD)
+	@{ \
+	  echo "library ieee;"; \
+	  echo "use ieee.std_logic_1164.all;"; \
+	  echo "use work.minicpu_pkg.all;"; \
+	  echo ""; \
+	  echo "package fpga_program is"; \
+	  echo "  constant PROGRAM : rom_t := work.$(PROGRAM)_rom.PROG;"; \
+	  echo "  constant RAM_INIT : ram_init_t := work.$(PROGRAM)_ram.INIT;"; \
+	  echo "end package fpga_program;"; \
+	} > $@
+
+synth: $(PROGRAM)_rom.vhd $(FPGA_PKG)
+	@mkdir -p $(FPGA_BUILD)
+	@set -o pipefail; \
+	$(YOSYS) -m $(GHDL_PLUGIN) -p \
+	  'ghdl --std=08 $(FPGA_VHDL) -e fpga_top; synth_ice40 -top fpga_top -json $(SYNTH_JSON)' \
+	  2>&1 | tee $(SYNTH_LOG)
+	@echo "SYNTHESIS OK: $(SYNTH_JSON)"
+
+post-synth:
+	python3 tools/post_synth.py --programs sum1to10,array_sum,call_ret,hello
+
+# ---- waveform dumps ------------------------------------------------------
+GHDL_WAVE_DIR := build/waves/ghdl
+WAVE_SOURCES = $(PKG_UNITS) $(SRC_UNITS) $(GEN_UNITS) uart_rx_model \
+               sum1to10_wave_tb hello_wave_tb
+
+waves: programs
+	@set -e; rm -rf $(GHDL_WAVE_DIR); mkdir -p $(GHDL_WAVE_DIR) docs/waves; \
+	for u in $(WAVE_SOURCES); do \
+	  $(GHDL) -a --std=08 --workdir=$(GHDL_WAVE_DIR) $$u.vhd; \
+	done
+	$(GHDL) --elab-run --std=08 --workdir=$(GHDL_WAVE_DIR) \
+	  sum1to10_wave_tb --vcd-nodate --vcd=docs/waves/sum1to10.vcd
+	$(GHDL) --elab-run --std=08 --workdir=$(GHDL_WAVE_DIR) \
+	  hello_wave_tb --vcd-nodate --vcd=docs/waves/hello_first_byte.vcd
+	@echo "WAVEFORMS: docs/waves/sum1to10.vcd docs/waves/hello_first_byte.vcd"
+
+pnr: synth
+	@set -o pipefail; \
+	$(NEXTPNR) --$(DEVICE) --package $(PACKAGE) --json $(SYNTH_JSON) \
+	  --pcf $(PCF) --freq $(FREQ) --seed $(SEED) --asc $(PNR_ASC) \
+	  --report $(FPGA_BUILD)/nextpnr-report.json 2>&1 | tee $(PNR_LOG)
+	icepack $(PNR_ASC) $(PNR_BIN)
+	@echo "PNR + BITSTREAM OK: $(PNR_BIN)"
+
+FORCE:
 
 clean:
 	rm -rf $(LIB) $(GEN) build

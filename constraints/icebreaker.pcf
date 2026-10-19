@@ -1,0 +1,28 @@
+# iCEBreaker v1.0b (iCE40UP5K-SG48) pin constraints for MiniCPU-8.
+# Clock, UART and on-board I/O are from the published iCEBreaker pinout.
+# GPIO_IN is mapped to PMOD1A, intended for an external 8-bit DIP-switch PMOD.
+# LED[7:5] use the three RGB LED channels (the RGB LED is one package; its
+# polarity is not verified here). These assignments are NOT verified on
+# physical hardware. Re-check them against your board revision before use.
+
+set_io clk      35
+set_io rst_n    10
+set_io uart_tx   9
+
+set_io led[0]   26
+set_io led[1]   27
+set_io led[2]   25
+set_io led[3]   23
+set_io led[4]   21
+set_io led[5]   39
+set_io led[6]   40
+set_io led[7]   41
+
+set_io sw[0]     4
+set_io sw[1]     2
+set_io sw[2]    47
+set_io sw[3]    45
+set_io sw[4]     3
+set_io sw[5]    48
+set_io sw[6]    46
+set_io sw[7]    44

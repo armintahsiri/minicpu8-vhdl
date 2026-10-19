@@ -5,3 +5,5 @@ __pycache__/
 *.o
 e~*
 .DS_Store
+hello_wave_tb
+sum1to10_wave_tb

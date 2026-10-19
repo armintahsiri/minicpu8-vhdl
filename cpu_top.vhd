@@ -16,7 +16,8 @@ entity cpu_top is
     PROGRAM  : rom_t;
     RAM_INIT : ram_init_t;
     CLK_FREQ : positive := 25_000_000;   -- UART baud reference
-    BAUD     : positive := 115_200);
+    BAUD     : positive := 115_200;
+    DEBUG    : boolean := true);         -- expose full data-RAM debug view
   port (
     clk       : in  std_logic;
     rst       : in  std_logic;                      -- synchronous, active high
@@ -115,7 +116,7 @@ begin
   mmio_we    <= ram_we and io_sel;
 
   ram_i : entity work.data_ram
-    generic map (INIT => RAM_INIT)
+    generic map (INIT => RAM_INIT, DEBUG => DEBUG)
     port map (clk => clk, we => ram_we_eff, addr => ram_addr,
               wdata => rd2, rdata => ram_data, dbg => dbg_ram);
 

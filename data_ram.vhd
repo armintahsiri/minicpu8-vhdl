@@ -10,7 +10,8 @@ use work.minicpu_pkg.all;
 
 entity data_ram is
   generic (
-    INIT : ram_init_t);
+    INIT  : ram_init_t;
+    DEBUG : boolean := true);
   port (
     clk   : in  std_logic;
     we    : in  std_logic;
@@ -53,5 +54,12 @@ begin
     end if;
   end process;
 
-  dbg <= mem;
+  -- The full debug view is useful in simulation but prevents RAM inference in
+  -- GHDL/Yosys (it forces every cell to be individually readable). Board
+  -- synthesis instantiates with DEBUG=false; testbenches keep the default.
+  dbg_gen : if DEBUG generate
+    dbg <= mem;
+  else generate
+    dbg <= (others => (others => '0'));
+  end generate;
 end architecture rtl;
