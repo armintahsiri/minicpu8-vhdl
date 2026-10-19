@@ -1,5 +1,5 @@
 ; r0_guard.asm -- R0 stays hardwired to zero for ALU, LOAD and CALL paths.
-; Expected: r0=0, RAM[3]=0, RAM[16]=0x5A, RAM[20]=link to after the call.
+; Expected: r0=0, RAM[3]=0, RAM[16]=0x5A, r7=5 (link past the call).
 
         .data 16, 0x5A
         loadi r1, 16

@@ -259,7 +259,10 @@ def generate_programs(count, seed=20251019):
                 code = code[m.end():]
             if code:
                 seen.add(code.split()[0].lower())
-    required = set(MANDATORY) | set(BRANCH_KINDS) | {"call", "ret", "halt"}
+    required = set(MANDATORY) | {"call", "ret", "halt"}
+    # Four branch slots per program cover all 13 kinds by about program 4.
+    if count >= 4:
+        required |= set(BRANCH_KINDS)
     missing = required - seen
     if missing:
         raise RuntimeError("random generator coverage missing: " +

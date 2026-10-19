@@ -133,7 +133,7 @@ it leaves the jump group free for conditions and CALL.
 | `0x0` | NOP  | `0xF000` | no operation, PC+1 | none | none |
 | `0x1` | HALT | `0xF001` | freeze PC; CPU stops | none | none |
 | `0x2` | RET  | `0xF002` | `PC <- R7` | none | none |
-| `0x3` | CMP  | `0xF0(rs)(rt)3` | compute `rs - rt`, set flags, **no register write** | none | Z N C V |
+| `0x3` | CMP  | `1111 000 rs rs rs rt rt rt 011` | compute `rs - rt`, set flags, **no register write** | none | Z N C V |
 | `0x4`-`0x7` | *reserved* | | decode as NOP | none | none |
 
 `CMP rs, rt` is SUB with `reg_write = 0`. The subtraction still goes through the
@@ -166,9 +166,9 @@ Per-class behavior (unchanged from Phase 1):
 - **AND, OR, XOR, NOT:** Z N from the result; **C and V cleared**.
 - **SHL:** `C = old bit 7`; `V = old bit7 xor new bit7` (sign changed); Z N.
 - **SHR:** `C = old bit 0`; `V = 0`; Z N.
-- **LOAD, STORE, LOADI, MOV-as-ADD, JMP, BZ/BNZ/BCS/BCC/BN/BNN/BLT/BGE, CALL,
-  RET, HALT, NOP, BEQ, BNE:** do not write the flags.
-  (MOV is a pseudo-instruction for ADD, so it *does* write flags; it is not in
+- **LOAD, STORE, LOADI, JMP, BZ/BNZ/BCS/BCC/BN/BNN/BLT/BGE, CALL, RET, HALT,
+  NOP, BEQ, BNE:** do not write the flags.
+  (MOV is a pseudo-instruction for ADD, so it *does* write flags and is not in
   this list. BEQ/BNE still use the dedicated comparator and do not touch flags.)
 
 ### Condition equations
