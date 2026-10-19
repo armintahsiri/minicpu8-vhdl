@@ -27,6 +27,10 @@ R3 = {"add": 0x0, "sub": 0x1, "and": 0x2, "or": 0x3, "xor": 0x5}  # rd, rs, rt
 R2 = {"not": 0x4, "shl": 0x6, "shr": 0x7, "mov": 0x8}             # rd, rs
 RI = {"loadi": 0x9}                                               # rd, imm6
 BR = {"beq": 0xA, "bne": 0xB}                                     # rs, rt, target
+# BEQ/BNE have only two 3-bit register slots beside the 6-bit offset.  The
+# second compared register (rt) is encoded in the rd field at bits [11:9];
+# rs is in its normal bits [8:6].  STORE uses the same trick for its data
+# register.  See docs/ISA.md, normative layout marker.
 OP_JMP, OP_HALT = 0xC, 0xD
 
 LABEL_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*")

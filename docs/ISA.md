@@ -53,6 +53,7 @@ Notes:
 - **Branch operand placement:** in BEQ/BNE the two compared registers are `rs`
   (bits 8:6) and `rt`, which is stored in the **`rd` field** (bits 11:9), because
   the 6-bit immediate occupies bits 5:0. The assembler places operands correctly.
+  Normative layout marker: `BEQ/BNE layout: rs = bits [8:6], rt = bits [11:9] (rd field), imm6 = bits [5:0]`.
 - **Branch semantics are register-compare, not flag-based:** the CPU contains a
   dedicated 8-bit equality comparator, so branches do not touch the flags and do
   not need a preceding compare instruction.
@@ -77,6 +78,22 @@ Notes:
   Absolute encoding makes `jmp` usable as a "go anywhere" jump, complementing the
   short-range conditional branches.
 - All additions to the PC are modulo 256 (8-bit PC).
+
+### Program-counter wrap (intended behaviour)
+
+The PC is exactly 8 bits. Every PC update is modulo 256:
+
+- `PC+1` wraps from `0xFF` to `0x00`.
+- A taken BEQ/BNE computes `PC+1+sext(imm6)` modulo 256, so a branch near
+  `0xFF` can wrap forward to a low address and a branch near `0x00` can wrap
+  backward to a high address.
+- `JMP` loads an absolute 8-bit target; `JMP 0xFF` executes the instruction in
+  the last ROM word.
+
+The ROM is 256 words and is filled with HALT beyond the program, so running
+past the end of a shorter program halts at the first filler word. A program
+that occupies all 256 words has no filler: `PC+1` at `0xFF` wraps to `0x00`
+and execution restarts. This is documented, intentional wrap-around.
 
 ## 4. Flags
 

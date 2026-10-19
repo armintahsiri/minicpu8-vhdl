@@ -58,13 +58,37 @@ make clean     # remove work/ and generated files
 
 Everything must end with `ALL TESTBENCHES PASSED`; any testbench failure
 aborts `make` with a nonzero exit code (each testbench reports via
-`severity failure`).
+`severity failure`).  The VHDL flow is dependency-aware: only sources whose
+files or dependencies changed are re-analysed, in dependency order.  Use
+`make clean && make test` for the full from-scratch check.
 
 To run one testbench manually:
 
 ```sh
 nvc --std=08 --work=work -e alu_tb -r
 ```
+
+## ROM loading, the HALT filler, and PC wrap
+
+The instruction ROM is not initialised from a file at run time. Instead, the
+assembler emits a VHDL package containing a `rom_t` constant, and the CPU
+receives that constant through the `PROGRAM` generic:
+
+```vhdl
+rom_i : entity work.instr_rom
+  generic map (INIT => PROGRAM)   -- e.g. work.sum1to10_rom.PROG
+  port map (addr => pc_q, data => instr);
+```
+
+`instr_rom` copies `INIT` into a 256-word array and fills every remaining word
+with **HALT**. Therefore running past the end of a shorter program executes a
+HALT and stops the CPU instead of executing uninitialised garbage. (A program
+that occupies all 256 words has no filler left; its PC simply wraps to 0.)
+
+The PC is 8 bits, so all PC arithmetic is modulo 256. This is intended:
+`PC+1` wraps `0xFF -> 0x00`, a taken relative branch near either end wraps
+around, and `JMP 0xFF` executes the last ROM word. `cpu_edge_tb` asserts all of
+these cases. See [docs/ISA.md](docs/ISA.md) for the normative statement.
 
 ## Assembling and running a program
 
@@ -116,4 +140,5 @@ nvc --std=08 --work=work -e alu_tb -r
 | `instr_rom_tb` | INIT readback + HALT fill above the program |
 | `control_unit_tb` | full decode table incl. reserved opcodes = NOP |
 | `cpu_tb` | system: sum 1..10 = 55 in R1; shifts/XOR/BEQ-taken program; timeouts |
+| `cpu_edge_tb` | forward/backward PC wrap, JMP 0xFF, falling into the HALT fill |
 | `tools/test_assembler.py` | encodings, labels, ranges, error line numbers |

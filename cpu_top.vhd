@@ -24,21 +24,24 @@ entity cpu_top is
 end entity cpu_top;
 
 architecture rtl of cpu_top is
-  signal instr     : word_t;
+  -- All signals have a defined initial value.  This does not change the
+  -- architecture, but it stops delta-cycle metavalue warnings at t=0 (before
+  -- the first clock edge settles the combinational network).
+  signal instr     : word_t := HALT_WORD;
 
   -- control
-  signal reg_write, flag_write, alu_src_imm, halt_int : std_logic;
-  signal alu_op    : alu_op_t;
-  signal branch    : branch_t;
+  signal reg_write, flag_write, alu_src_imm, halt_int : std_logic := '0';
+  signal alu_op    : alu_op_t := ALU_ADD;
+  signal branch    : branch_t := BR_NONE;
 
   -- datapath
-  signal pc_q, pc_plus1, pc_target, br_target : byte_t;
-  signal pc_load    : std_logic;
-  signal addr2      : regsel_t;
-  signal rd1, rd2, alu_b, imm_ext, result : byte_t;
-  signal z, c, n, v : std_logic;
-  signal flag_d     : std_logic_vector(3 downto 0);
-  signal eq         : std_logic;
+  signal pc_q, pc_plus1, pc_target, br_target : byte_t := (others => '0');
+  signal pc_load    : std_logic := '0';
+  signal addr2      : regsel_t := (others => '0');
+  signal rd1, rd2, alu_b, imm_ext, result : byte_t := (others => '0');
+  signal z, c, n, v : std_logic := '0';
+  signal flag_d     : std_logic_vector(3 downto 0) := (others => '0');
+  signal eq         : std_logic := '0';
 begin
 
   pc_i : entity work.pc

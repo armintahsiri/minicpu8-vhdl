@@ -30,5 +30,14 @@ architecture rtl of instr_rom is
 
   constant mem : mem_t := build;
 begin
-  data <= mem(to_integer(unsigned(addr)));
+  -- The is_x guard keeps the simulator quiet during the very first delta
+  -- cycle, before the PC register's output has settled from 'U'.
+  read_p : process (addr) is
+  begin
+    if is_x(addr) then
+      data <= HALT_WORD;
+    else
+      data <= mem(to_integer(unsigned(addr)));
+    end if;
+  end process;
 end architecture rtl;

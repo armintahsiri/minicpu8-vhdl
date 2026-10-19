@@ -34,12 +34,21 @@ begin
     end if;
   end process;
 
-  -- asynchronous reads; R0 always reads zero. Reading a register in the
+  -- Asynchronous reads; R0 always reads zero. Reading a register in the
   -- same cycle it is written returns the OLD value (visible after the edge).
-  rd1 <= (others => '0') when raddr1 = "000"
-         else mem(to_integer(unsigned(raddr1)));
-  rd2 <= (others => '0') when raddr2 = "000"
-         else mem(to_integer(unsigned(raddr2)));
+  -- The is_x guards avoid numeric_std metavalue warnings in the first delta
+  -- cycle, before the instruction word has settled.
+  read_p : process (all) is
+  begin
+    rd1 <= (others => '0');
+    rd2 <= (others => '0');
+    if not is_x(raddr1) and raddr1 /= "000" then
+      rd1 <= mem(to_integer(unsigned(raddr1)));
+    end if;
+    if not is_x(raddr2) and raddr2 /= "000" then
+      rd2 <= mem(to_integer(unsigned(raddr2)));
+    end if;
+  end process;
 
   dbg <= mem;   -- dbg(0) stays zero because mem(0) is never written
 

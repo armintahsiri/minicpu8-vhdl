@@ -70,7 +70,14 @@ begin
     c      <= cf;
     v      <= vf;
     n      <= res(7);
-    if res = 0 then z <= '1'; else z <= '0'; end if;
+    -- is_x guard: no numeric_std metavalue warning in the first delta cycle.
+    if is_x(std_logic_vector(res)) then
+      z <= '0';
+    elsif res = 0 then
+      z <= '1';
+    else
+      z <= '0';
+    end if;
   end process;
 
 end architecture rtl;
