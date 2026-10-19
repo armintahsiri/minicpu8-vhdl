@@ -235,7 +235,9 @@ The PC is exactly 8 bits; every PC update is modulo 256:
 
 ## 7. Data RAM
 
-- **Size:** 256 bytes, 8-bit address, 8-bit data.
+- **Size:** 256 bytes of physical storage (8-bit address, 8-bit data), but
+  only `0x00..0xEF` (240 bytes) are CPU data RAM. `0xF0..0xFF` is decoded as
+  MMIO (section 8) and cannot be used as RAM.
 - **Read:** asynchronous (combinational) from the addressed byte. This is
   required by the single-cycle datapath.
 - **Write:** synchronous on the rising clock edge, only when `mem_write = 1`.
@@ -249,7 +251,8 @@ The PC is exactly 8 bits; every PC update is modulo 256:
   returns the old byte; the new byte is visible after the rising edge.
 - **Initial contents:** a VHDL generic `RAM_INIT : ram_init_t`. Entry `i` is
   the byte at address `i`; addresses not covered are zero. The assembler
-  generates this generic from `.data` directives. No file I/O is used.
+  generates this generic from `.data` directives and rejects data that would
+  reach into the MMIO region. No file I/O is used.
 - Writes to R0 are ignored for every instruction, including LOAD. CALL writes
   R7 by hardware, never R0.
 
@@ -259,7 +262,92 @@ addresses directly (`[r0+0]`..`[r0+31]`), build a base with shifts/adds, or use
 a negative immediate (e.g. `[r0-32]` addresses 0xE0). This is a known
 limitation, not a wrap exception.
 
-## 8. CALL / RET convention
+## 8. I/O map (MMIO)
+
+Phase 3 adds **memory-mapped I/O** without changing any instruction encoding.
+The data address space is split as follows:
+
+- **Data RAM:** `0x00..0xEF` (240 bytes).
+- **MMIO:** `0xF0..0xFF` (16 addresses). The top 16 data-RAM cells are **not**
+  available as RAM.
+- `LOAD`/`STORE` keep exactly their ISA v2 semantics: the effective address is
+  still `(rs + sext(imm6)) mod 256`. `cpu_top` decodes addresses
+  `>= 0xF0` to `mmio` and all other addresses to `data_ram`. MMIO reads are
+  combinational (so a LOAD still completes in one cycle); MMIO writes are
+  synchronous on the rising edge.
+
+| Address | Name | Access | Reset | Behavior |
+|---------|------|--------|-------|----------|
+| `0xF0` | `UART_TX` | W (read 0) | — | Write a byte to the 8N1 transmitter. A write while `UART_STATUS.tx_busy=1` is **ignored** (no queue, no overwrite). Reads return `0x00`. |
+| `0xF1` | `UART_STATUS` | R | busy=0 | Bit 0 = `tx_busy`; bits 7:1 read 0. Writes are ignored. |
+| `0xF2` | `GPIO_OUT` | W / R | `0x00` | 8-bit LED/output register. Readback returns the register. |
+| `0xF3` | `GPIO_IN` | R | `0x00` | Two-flop-synchronized switches/buttons. Writes are ignored. |
+| `0xF4` | `CYCLE_COUNT_LO` | R | `0x00` | Low byte of a free-running 8-bit cycle counter. Writes are ignored. |
+| `0xF5..0xFF` | reserved | R | `0x00` | Reads return `0x00`; writes are ignored. |
+
+Writes to read-only addresses are ignored. All MMIO behavior is synchronous to
+the CPU clock and there are no interrupts.
+
+### UART transmitter (`0xF0` / `0xF1`)
+
+- 8N1: one start bit (`0`), eight data bits **LSB first**, one stop bit (`1`);
+  idle line is high.
+- Generics `CLK_FREQ` (Hz) and `BAUD` (bits/s). The integer divisor is
+  `CLKS_PER_BIT = CLK_FREQ / BAUD`; the actual baud rate is
+  `CLK_FREQ / CLKS_PER_BIT`. There is no fractional divider. A divisor below 2
+  is rejected by an assertion.
+- `tx_busy` goes high on the write edge and stays high for exactly ten bit
+  periods (start + 8 data + stop). Software must poll `UART_STATUS` before the
+  next write; there is no FIFO.
+- The first write after reset is accepted. A write while busy has no effect and
+  does not change the byte in flight.
+
+### GPIO (`0xF2` / `0xF3`)
+
+- `GPIO_OUT` is a plain 8-bit register, readable back, reset to `0x00`.
+- `GPIO_IN` is asynchronous at the FPGA pin. It passes through a **two-flop
+  synchronizer** before the CPU can read it, so a pin change becomes visible
+  after two rising clock edges. Writes to `GPIO_IN` are ignored.
+
+### Cycle counter (`0xF4`)
+
+- Free-running 8-bit counter, reset to `0x00`, incremented on every rising
+  clock edge, including while the CPU is halted. Only the low byte is exposed;
+  it wraps `0xFF -> 0x00`. Writes are ignored.
+
+### Assembly symbols
+
+The assembler predefines case-insensitive symbols for the I/O addresses:
+`UART_TX=0xF0`, `UART_STATUS=0xF1`, `GPIO_OUT=0xF2`, `GPIO_IN=0xF3`,
+`CYCLE_COUNT_LO=0xF4`. Because the ISA has only a signed 6-bit immediate/offset
+field, these addresses are encoded through their signed equivalents
+(`0xF0 -> -16`, etc.). They are accepted by `loadi` and as memory offsets:
+
+```asm
+        loadi r1, UART_STATUS       ; r1 = 0xF1
+poll:   load  r2, [r1+0]            ; LOAD does not write flags
+        cmp   r2, r0                ; so test the value explicitly
+        bnz   poll
+        loadi r1, UART_TX
+        loadi r2, 0x0A              ; '\n'
+        store r2, [r1+0]
+```
+
+Using an I/O symbol as a label, jump target or arithmetic immediate is an
+assembler error.
+
+### Consequences
+
+- `.data` may only initialize `0x00..0xEF`; a directive that reaches `0xF0` or
+  above is rejected. The VHDL `data_ram` still contains 256 physical bytes for
+  debug, but CPU writes to `0xF0..0xFF` go to MMIO and never change those cells.
+- Data structures, saved R7 links and buffers must stay below `0xF0`.
+- `GPIO_IN` is read-only and synchronized; a program that changes the pin and
+  reads it in the very next cycle may still see the old value.
+- `CYCLE_COUNT_LO` is a free-running low byte; it is useful for timing tests,
+  not as a stable time base unless software handles wrap.
+
+## 9. CALL / RET convention
 
 - **CALL target:** `R7 <- (PC+1) mod 256` (the link), then `PC <- target`.
   CALL does not read or write the flags. R7 is written unconditionally by
@@ -279,7 +367,7 @@ limitation, not a wrap exception.
 - A called subroutine that itself makes no calls may simply end with `ret`.
 - `CALL` at address `0xFF` stores link `0x00`; `RET` to `0x00` is valid.
 
-## 9. Encoding examples
+## 10. Encoding examples
 
 ```
 add r1, r2, r3      ; 0000 001 010 011 000 = 0x0298
@@ -298,20 +386,24 @@ call 0x90           ; 1100 1111 10010000     = 0xCF90
 jmp 0x80            ; 1100 0000 10000000     = 0xC080
 ```
 
-## 10. Reset and visible state
+## 11. Reset and visible state
 
 - Reset is synchronous and active high.
-- Reset zeroes the PC and the flags, and suppresses register/RAM/flags writes
-  during reset cycles.
+- Reset zeroes the PC and the flags, suppresses register/RAM/flags writes
+  during reset cycles, and resets the MMIO peripherals: GPIO_OUT and the GPIO
+  input synchronizer to `0x00`, the cycle counter to `0x00`, and the UART to
+  idle with `tx_busy=0`.
 - The register file has no architectural reset; in simulation it is
   zero-initialized as a convenience. Programs must not rely on that.
 - Data RAM is zero except for the `RAM_INIT` generic entries.
 - HALT freezes the PC and raises `halted`; registers, flags and RAM keep their
-  values and remain observable through the debug ports.
+  values and remain observable through the debug ports. The UART may still be
+  transmitting, and the free-running cycle counter keeps counting after HALT.
 - `dbg_pc`, `dbg_flags` (Z N C V) and `dbg_regs` expose the final state;
-  `dbg_ram` exposes the 256-byte data RAM.
+  `dbg_ram` exposes the 256 physical data-RAM bytes (including the unreachable
+  `0xF0..0xFF` cells, which normal stores never modify).
 
-## 11. Design decisions (and why)
+## 12. Design decisions (and why)
 
 | Decision | Choice | Rationale / alternative rejected |
 |----------|--------|----------------------------------|
@@ -338,8 +430,18 @@ jmp 0x80            ; 1100 0000 10000000     = 0xC080
 | HALT/Pseudo NOP encodings | `0xF001`, `0xF000` | HALT moved out of 0xD; NOP is a real no-op so `.org` gaps and padding are safe |
 | ROM fill | HALT `0xF001` above the program | running off the end stops the CPU; `.org` gaps are NOP-filled |
 | PC wrap | modulo 256, intended | 8-bit PC; asserted by `cpu_edge_tb` |
+| MMIO placement | top 16 data addresses `0xF0..0xFF` | reuses unmodified LOAD/STORE and a 240-byte RAM window; no new instructions or address space |
+| I/O read timing | combinational, like data RAM | keeps LOAD single-cycle; write remains synchronous |
+| UART write while busy | ignored (no queue, no overwrite) | smallest hardware and clearest contract; software must poll `UART_STATUS`; tested at UART, MMIO and CPU level |
+| UART baud divisor | integer `CLK_FREQ / BAUD` | avoids fractional-divider complexity; the resulting baud is documented and sufficient for a demo |
+| UART_TX reads | return `0x00` | write-only register; avoids implying a readable transmit buffer |
+| GPIO_IN | two-flop synchronizer | asynchronous FPGA pins need metastability protection; two cycles of latency is documented and tested |
+| Cycle counter | free-running 8-bit low byte, reset to 0 | minimal timer for demos/tests; wraps by design, no interrupts |
+| Reserved I/O reads | return `0x00`, writes ignored | deterministic behavior, no bus errors or hangs |
+| `.data` into MMIO | assembler error | prevents silently losing initialized data; the hardware never writes RAM above `0xEF` |
+| I/O assembly symbols | predefined names encoded as signed offsets | keeps the ISA's signed 6-bit immediate/offset unchanged while making programs readable |
 
-## 12. Migration notes from Phase 1
+## 13. Migration notes from Phase 1
 
 - Existing opcodes 0x0-0x7, 0x9, 0xA, 0xB and 0xC keep their encodings.
 - `HALT` changes from `0xD000` to `0xF001`; `MOV` changes from opcode 0x8 to

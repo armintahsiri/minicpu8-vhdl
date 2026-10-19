@@ -24,8 +24,8 @@ def ok(name, cond, detail=""):
         print(f"  FAIL {name}" + (f": {detail}" if detail else ""))
 
 
-def run(text, max_cycles=100000):
-    cpu, res = isa_sim.run_source(text, max_cycles=max_cycles)
+def run(text, max_cycles=100000, **kwargs):
+    cpu, res = isa_sim.run_source(text, max_cycles=max_cycles, **kwargs)
     return cpu, res
 
 
@@ -307,11 +307,65 @@ eq("LOAD/STORE/JMP/CALL/RET preserve flags",
 cpu, _ = run("loop: jmp loop", max_cycles=10)
 eq("runaway loop times out", (cpu.halted, cpu.timeout, cpu.cycles), (False, True, 10))
 
+# ---------------- MMIO: UART / GPIO / cycle counter ----------------
+io_prog = """
+        loadi r1, UART_STATUS
+        loadi r2, UART_TX
+        loadi r3, 0x15
+        store r3, [r2+0]      ; accepted
+        load  r4, [r1+0]      ; busy
+        store r3, [r2+0]      ; ignored while busy
+        loadi r5, 0x16
+        store r5, [r2+0]      ; ignored while busy
+        load  r6, [r0+GPIO_IN]
+        load  r7, [r0+GPIO_OUT]
+        halt
+"""
+cpu, _ = run(io_prog, gpio_in=0xA5, clks_per_bit=4)
+eq("UART accepted byte captured", cpu.uart_out, [0x15])
+eq("UART status busy after store", cpu.regs[4], 1)
+eq("UART write-while-busy ignored", cpu.uart_out, [0x15])
+eq("GPIO_IN parameter read", cpu.regs[6], 0xA5)
+eq("GPIO_OUT initial zero", cpu.regs[7], 0x00)
+
+gpio_prog = """
+        loadi r1, 0x15
+        store r1, [r0+GPIO_OUT]
+        load  r2, [r0+GPIO_OUT]
+        halt
+"""
+cpu, _ = run(gpio_prog)
+eq("GPIO_OUT write/readback model", (cpu.gpio_out, cpu.regs[2]), (0x15, 0x15))
+
+cycle_prog = """
+        load r1, [r0+CYCLE_COUNT_LO]
+        load r2, [r0+CYCLE_COUNT_LO]
+        halt
+"""
+cpu, _ = run(cycle_prog)
+eq("cycle counter low byte", (cpu.regs[1], cpu.regs[2]), (0, 1))
+
+poll_prog = """
+        loadi r1, UART_STATUS
+        loadi r2, UART_TX
+        loadi r3, 0x15
+        store r3, [r2+0]
+poll:   load  r4, [r1+0]
+        cmp   r4, r0
+        bnz   poll
+        halt
+"""
+cpu, _ = run(poll_prog, clks_per_bit=4)
+eq("UART busy polling terminates", (cpu.halted, cpu._uart_busy()), (True, 0))
+ok("UART busy polling waited", cpu.cycles > 40, f"cycles={cpu.cycles}")
+
 # ---------------- state is JSON serialisable ----------------
 cpu, _ = run("loadi r1, 7\nhalt")
 state = cpu.state()
 ok("state JSON serialisable", json.loads(json.dumps(state)) == state)
-eq("state keys", sorted(state), ["cycles", "flags", "halted", "pc", "ram", "regs", "timeout"])
+eq("state keys", sorted(state),
+   ["cycles", "flags", "gpio_in", "gpio_out", "halted", "pc", "ram", "regs",
+    "timeout", "uart_busy", "uart_hex", "uart_out"])
 eq("state ram length", len(state["ram"]), 256)
 
 print()

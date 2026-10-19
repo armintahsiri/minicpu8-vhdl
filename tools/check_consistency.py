@@ -18,6 +18,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TOOLS = os.path.join(ROOT, "tools")
 sys.path.insert(0, TOOLS)
 import assembler  # noqa: E402
+import isa_sim    # noqa: E402
 
 failures = []
 checks = 0
@@ -56,6 +57,23 @@ def parse_constants(text):
     for name, typ, bits in re.findall(pat, text):
         out[name] = (typ, int(bits, 2), len(bits))
     return out
+
+
+def parse_io_constants(text):
+    """Return {name: int} for RAM_LAST / IO_* byte constants in the package."""
+    pat = (r'constant\s+(RAM_LAST|IO_[A-Z0-9_]+)\s*:\s*byte_t\s*:=\s*'
+           r'x"([0-9A-Fa-f]{2})"')
+    return {name: int(value, 16) for name, value in re.findall(pat, text)}
+
+
+def parse_io_doc_table(sec):
+    """Parse '| `0xNN` | `NAME` | ...' rows from the I/O map table."""
+    rows = {}
+    for line in sec.splitlines():
+        m = re.match(r'^\|\s*`0x([0-9A-Fa-f]{2})`\s*\|\s*`([A-Z0-9_]+)`\s*\|', line)
+        if m:
+            rows[int(m.group(1), 16)] = m.group(2)
+    return rows
 
 
 def parse_doc_table(sec):
@@ -187,6 +205,76 @@ ok("ISA.md documents 256 x 8 data RAM", "256 bytes" in doc_text and "8-bit addre
 ok("ISA.md documents address wrap", "(rs + sext(imm6)) mod 256" in doc_text)
 ok("ISA.md documents the R7 link convention", "R7 <- (PC+1) mod 256" in doc_text)
 ok("ISA.md documents no hardware stack", "no hardware stack" in doc_text.lower())
+
+# ---- Phase 3 I/O map: package vs docs vs assembler vs golden model -------
+io_consts = parse_io_constants(pkg_text)
+doc_io_sec = section(doc_text, "## 8. I/O map (MMIO)",
+                     "### UART transmitter")
+doc_io = parse_io_doc_table(doc_io_sec)
+asm_io = {name.upper(): addr for name, addr in assembler.IO_SYMBOLS.items()}
+
+ok("package defines IO_BASE=0xF0", io_consts.get("IO_BASE") == 0xF0,
+   f"found {io_consts.get('IO_BASE')}")
+ok("package defines RAM_LAST=0xEF", io_consts.get("RAM_LAST") == 0xEF,
+   f"found {io_consts.get('RAM_LAST')}")
+ok("assembler RAM_LAST matches package",
+   assembler.RAM_LAST == io_consts.get("RAM_LAST"))
+ok("assembler IO_BASE matches package",
+   assembler.IO_BASE == io_consts.get("IO_BASE"))
+ok("documents 240-byte RAM window", "0x00..0xEF" in doc_text and
+   "240" in doc_io_sec)
+ok("docs show the I/O region", "0xF0..0xFF" in doc_io_sec)
+ok("docs state busy writes are ignored", "ignored" in doc_io_sec.lower())
+ok("docs state .data reaching I/O is rejected",
+   ".data" in doc_text and "rejected" in doc_text.lower())
+
+io_pkg_names = {
+    "IO_UART_TX": "UART_TX",
+    "IO_UART_STATUS": "UART_STATUS",
+    "IO_GPIO_OUT": "GPIO_OUT",
+    "IO_GPIO_IN": "GPIO_IN",
+    "IO_CYCLE_LO": "CYCLE_COUNT_LO",
+}
+for pkg_name, sym in io_pkg_names.items():
+    addr = io_consts.get(pkg_name)
+    ok(f"package defines {pkg_name}=0x{addr:02X}" if addr is not None
+       else f"package defines {pkg_name}", addr is not None)
+    ok(f"assembler symbol {sym} matches {pkg_name}",
+       asm_io.get(sym) == addr, f"assembler has {asm_io.get(sym)}")
+    ok(f"docs I/O table has {sym} at 0x{addr:02X}" if addr is not None
+       else f"docs I/O table has {sym}", doc_io.get(addr) == sym,
+       f"docs has {doc_io.get(addr)}")
+    sim_name = {
+        "IO_UART_TX": "IO_UART_TX", "IO_UART_STATUS": "IO_UART_STATUS",
+        "IO_GPIO_OUT": "IO_GPIO_OUT", "IO_GPIO_IN": "IO_GPIO_IN",
+        "IO_CYCLE_LO": "IO_CYCLE_LO",
+    }[pkg_name]
+    ok(f"golden model {sim_name} matches package",
+       getattr(isa_sim, sim_name) == addr,
+       f"isa_sim has {getattr(isa_sim, sim_name)}")
+
+ok("package defines reserved I/O range F5..FF",
+   io_consts.get("IO_RESERVED_LO") == 0xF5 and
+   io_consts.get("IO_RESERVED_HI") == 0xFF)
+ok("assembler rejects .data into I/O",
+   assembler.RAM_LAST == 0xEF)
+try:
+    assembler.assemble_with_data(".data 0xEF, 1, 2\nmain: nop")
+    data_io_rejected = False
+except assembler.AsmError:
+    data_io_rejected = True
+ok("assembler raises on .data across 0xEF/0xF0", data_io_rejected)
+
+cpu_io_norm = normalize(cpu_text)
+ok("cpu_top compares ram_addr numerically against IO_BASE",
+   "unsigned(ram_addr)>=unsigned(io_base)" in cpu_io_norm)
+ok("cpu_top gates data RAM writes with not io_sel",
+   "ram_we_eff<=ram_weandnotio_sel" in cpu_io_norm)
+ok("cpu_top instantiates mmio", "mmio_i:entitywork.mmio" in cpu_io_norm)
+ok("cpu_top exposes uart_tx/gpio ports",
+   "uart_tx:outstd_logic" in cpu_io_norm and
+   "gpio_out:outbyte_t" in cpu_io_norm and
+   "gpio_in:inbyte_t" in cpu_io_norm)
 
 print()
 if failures:

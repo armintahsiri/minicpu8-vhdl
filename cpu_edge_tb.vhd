@@ -63,24 +63,28 @@ begin
   dut_f : entity work.cpu_top
     generic map (PROGRAM => PROG_FWD, RAM_INIT => EMPTY_RAM)
     port map (clk => clk, rst => rst, halted => halted_f,
+              gpio_in => x"00", gpio_out => open, uart_tx => open,
               dbg_pc => pc_f, dbg_flags => fl_f, dbg_regs => rf_f,
               dbg_ram => ram_f);
 
   dut_b : entity work.cpu_top
     generic map (PROGRAM => PROG_BWD, RAM_INIT => EMPTY_RAM)
     port map (clk => clk, rst => rst, halted => halted_b,
+              gpio_in => x"00", gpio_out => open, uart_tx => open,
               dbg_pc => pc_b, dbg_flags => fl_b, dbg_regs => rf_b,
               dbg_ram => ram_b);
 
   dut_j : entity work.cpu_top
     generic map (PROGRAM => PROG_JMPFF, RAM_INIT => EMPTY_RAM)
     port map (clk => clk, rst => rst, halted => halted_j,
+              gpio_in => x"00", gpio_out => open, uart_tx => open,
               dbg_pc => pc_j, dbg_flags => fl_j, dbg_regs => rf_j,
               dbg_ram => ram_j);
 
   dut_e : entity work.cpu_top
     generic map (PROGRAM => PROG_END, RAM_INIT => EMPTY_RAM)
     port map (clk => clk, rst => rst, halted => halted_e,
+              gpio_in => x"00", gpio_out => open, uart_tx => open,
               dbg_pc => pc_e, dbg_flags => fl_e, dbg_regs => rf_e,
               dbg_ram => ram_e);
 

@@ -24,6 +24,19 @@ import assembler  # noqa: E402
 HALT_WORD = 0xF001
 NOP_WORD = 0xF000
 
+# MMIO map (docs/ISA.md section 8). Values are kept in sync with
+# minicpu_pkg.vhd, tools/assembler.py and docs/ISA.md by
+# tools/check_consistency.py.
+RAM_LAST = 0xEF
+IO_BASE = 0xF0
+IO_UART_TX = 0xF0
+IO_UART_STATUS = 0xF1
+IO_GPIO_OUT = 0xF2
+IO_GPIO_IN = 0xF3
+IO_CYCLE_LO = 0xF4
+UART_BITS_PER_FRAME = 10       # start + 8 data + stop
+DEFAULT_CLKS_PER_BIT = 217     # 25 MHz / 115200, matching cpu_top defaults
+
 # ALU op codes mirror minicpu_pkg.alu_op_t ordering.
 ALU_ADD, ALU_SUB, ALU_AND, ALU_OR, ALU_NOT, ALU_PASS_B, ALU_XOR, ALU_SHL, ALU_SHR = range(9)
 
@@ -79,9 +92,12 @@ def alu(op, a, b):
 
 
 class MiniCPU8:
-    def __init__(self, words, ram=None, max_cycles=100000):
+    def __init__(self, words, ram=None, max_cycles=100000, gpio_in=0,
+                 clks_per_bit=DEFAULT_CLKS_PER_BIT, max_uart_bytes=4096):
         if len(words) > 256:
             raise ValueError("program exceeds 256 words")
+        if clks_per_bit < 1:
+            raise ValueError("clks_per_bit must be positive")
         self.rom = [HALT_WORD] * 256
         for i, w in enumerate(words):
             self.rom[i] = w & 0xFFFF
@@ -89,6 +105,8 @@ class MiniCPU8:
         if ram:
             if len(ram) > 256:
                 raise ValueError("RAM init exceeds 256 bytes")
+            if len(ram) > IO_BASE:
+                raise ValueError("RAM init overlaps the MMIO region")
             for i, b in enumerate(ram):
                 self.ram[i] = b & 0xFF
         self.regs = [0] * 8
@@ -99,6 +117,13 @@ class MiniCPU8:
         self.cycles = 0
         self.max_cycles = max_cycles
         self.trace = []
+        # MMIO state. UART_TX bytes are captured in accepted-write order.
+        self.gpio_in = gpio_in & 0xFF
+        self.gpio_out = 0
+        self.uart_out = []
+        self.uart_busy_until = -1
+        self.clks_per_bit = clks_per_bit
+        self.max_uart_bytes = max_uart_bytes
 
     # -- helpers ---------------------------------------------------------
     def _wr(self, r, value):
@@ -110,6 +135,40 @@ class MiniCPU8:
 
     def _addr(self, rs, imm6):
         return (self.regs[rs] + sext6(imm6)) & 0xFF
+
+    # -- MMIO ------------------------------------------------------------
+    def _uart_busy(self):
+        """Busy model: a write accepted at instruction cycle N keeps the
+        transmitter busy through cycle N+10*clks_per_bit (inclusive), matching
+        uart_tx.vhd's start+8 data+stop frame. This is the documented
+        cycle-level simplification; it is checked against the VHDL with the
+        same CLKS_PER_BIT by the I/O differential tests."""
+        return 1 if self.cycles <= self.uart_busy_until else 0
+
+    def _io_read(self, addr):
+        if addr == IO_UART_STATUS:
+            return self._uart_busy()
+        if addr == IO_GPIO_OUT:
+            return self.gpio_out
+        if addr == IO_GPIO_IN:
+            return self.gpio_in
+        if addr == IO_CYCLE_LO:
+            return self.cycles & 0xFF
+        # UART_TX is write-only; 0xF5..0xFF are reserved: read 0.
+        return 0
+
+    def _io_write(self, addr, value):
+        value &= 0xFF
+        if addr == IO_UART_TX:
+            if not self._uart_busy():
+                if len(self.uart_out) < self.max_uart_bytes:
+                    self.uart_out.append(value)
+                self.uart_busy_until = (self.cycles +
+                                        UART_BITS_PER_FRAME * self.clks_per_bit)
+            # writes while busy are ignored (no queue), like uart_tx.vhd
+        elif addr == IO_GPIO_OUT:
+            self.gpio_out = value
+        # UART_STATUS, GPIO_IN, CYCLE_COUNT_LO and reserved are read-only.
 
     def _is_halt(self, word):
         return ((word >> 12) & 0xF) == 0xF and (word & 0x7) == 0x1
@@ -158,7 +217,11 @@ class MiniCPU8:
             self._wr(rd, res)
             self._flags(z, n, c, v)
         elif op == 0x8:                    # LOAD
-            self._wr(rd, self.ram[self._addr(rs, imm)])
+            addr = self._addr(rs, imm)
+            if addr >= IO_BASE:
+                self._wr(rd, self._io_read(addr))
+            else:
+                self._wr(rd, self.ram[addr])
         elif op == 0x9:                    # LOADI
             self._wr(rd, sext6(imm) & 0xFF)
         elif op == 0xA:                    # BEQ (register comparator)
@@ -177,7 +240,11 @@ class MiniCPU8:
                     next_pc = target
             # cond 0x9..0xE reserved -> fall through (NOP)
         elif op == 0xD:                    # STORE (data register in rd field)
-            self.ram[self._addr(rs, imm)] = self.regs[rd]
+            addr = self._addr(rs, imm)
+            if addr >= IO_BASE:
+                self._io_write(addr, self.regs[rd])
+            else:
+                self.ram[addr] = self.regs[rd]
         elif op == 0xE:                    # ADDI
             res, z, n, c, v = alu(ALU_ADD, self.regs[rs], sext6(imm) & 0xFF)
             self._wr(rd, res)
@@ -216,20 +283,30 @@ class MiniCPU8:
             "cycles": self.cycles,
             "halted": self.halted,
             "timeout": self.timeout,
+            "uart_out": list(self.uart_out),
+            "uart_hex": "".join(f"{b:02X}" for b in self.uart_out),
+            "gpio_out": self.gpio_out,
+            "gpio_in": self.gpio_in,
+            "uart_busy": self._uart_busy(),
         }
 
     def compact(self):
         s = self.state()
         f = s["flags"]
+        uart = s["uart_hex"] if s["uart_hex"] else "(none)"
         return (f"pc=0x{s['pc']:02X} flags=ZNCV={f['z']}{f['n']}{f['c']}{f['v']} "
                 f"cycles={s['cycles']} halted={int(s['halted'])} "
-                f"timeout={int(s['timeout'])} regs=" +
+                f"timeout={int(s['timeout'])} gpio_out=0x{s['gpio_out']:02X} "
+                f"uart={uart} regs=" +
                 " ".join(f"r{i}=0x{v:02X}" for i, v in enumerate(s["regs"])))
 
 
-def run_source(text, max_cycles=100000):
+def run_source(text, max_cycles=100000, gpio_in=0,
+               clks_per_bit=DEFAULT_CLKS_PER_BIT, max_uart_bytes=4096):
     result = assembler.assemble_with_data(text)
-    cpu = MiniCPU8(result.words, result.ram, max_cycles=max_cycles)
+    cpu = MiniCPU8(result.words, result.ram, max_cycles=max_cycles,
+                   gpio_in=gpio_in, clks_per_bit=clks_per_bit,
+                   max_uart_bytes=max_uart_bytes)
     return cpu.run(), result
 
 
@@ -239,11 +316,18 @@ def main():
     ap.add_argument("--json", action="store_true", help="print final state as JSON")
     ap.add_argument("--ram", action="store_true", help="print all 256 RAM bytes")
     ap.add_argument("--max-cycles", type=int, default=100000)
+    ap.add_argument("--gpio-in", type=lambda s: int(s, 0), default=0,
+                    help="GPIO_IN value supplied to the program (default 0)")
+    ap.add_argument("--clks-per-bit", type=int, default=DEFAULT_CLKS_PER_BIT,
+                    help="UART busy model: clocks per bit (default 217 = "
+                         "25MHz/115200)")
     args = ap.parse_args()
 
     try:
         with open(args.input) as f:
-            cpu, _ = run_source(f.read(), args.max_cycles)
+            cpu, _ = run_source(f.read(), args.max_cycles,
+                                gpio_in=args.gpio_in,
+                                clks_per_bit=args.clks_per_bit)
     except assembler.AsmError as e:
         sys.exit(str(e))
     except OSError as e:
@@ -253,6 +337,11 @@ def main():
         print(json.dumps(cpu.state(), sort_keys=True))
         return
     print(cpu.compact())
+    print("UART capture: " +
+          (" ".join(f"{b:02X}" for b in cpu.uart_out)
+           if cpu.uart_out else "(none)"))
+    print(f"GPIO_OUT=0x{cpu.gpio_out:02X} GPIO_IN=0x{cpu.gpio_in:02X} "
+          f"UART_BUSY={cpu._uart_busy()}")
     if args.ram:
         for base in range(0, 256, 16):
             chunk = " ".join(f"{b:02X}" for b in cpu.ram[base:base + 16])

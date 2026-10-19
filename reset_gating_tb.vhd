@@ -35,6 +35,7 @@ begin
   dut : entity work.cpu_top
     generic map (PROGRAM => PROG, RAM_INIT => RAM_INIT)
     port map (clk => clk, rst => rst, halted => halted,
+              gpio_in => x"00", gpio_out => open, uart_tx => open,
               dbg_pc => pc, dbg_flags => flags, dbg_regs => regs,
               dbg_ram => ram);
 

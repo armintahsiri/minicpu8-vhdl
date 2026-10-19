@@ -52,6 +52,7 @@ begin
     generic map (PROGRAM => work.sum1to10_rom.PROG,
                  RAM_INIT => work.sum1to10_ram.INIT)
     port map (clk => clk, rst => rst, halted => halted_v(0),
+              gpio_in => x"00", gpio_out => open, uart_tx => open,
               dbg_pc => pc_v(0), dbg_flags => flags_v(0),
               dbg_regs => regs_v(0), dbg_ram => ram_v(0));
 
@@ -59,6 +60,7 @@ begin
     generic map (PROGRAM => work.shift_branch_rom.PROG,
                  RAM_INIT => work.shift_branch_ram.INIT)
     port map (clk => clk, rst => rst, halted => halted_v(1),
+              gpio_in => x"00", gpio_out => open, uart_tx => open,
               dbg_pc => pc_v(1), dbg_flags => flags_v(1),
               dbg_regs => regs_v(1), dbg_ram => ram_v(1));
 
@@ -66,6 +68,7 @@ begin
     generic map (PROGRAM => work.array_sum_rom.PROG,
                  RAM_INIT => work.array_sum_ram.INIT)
     port map (clk => clk, rst => rst, halted => halted_v(2),
+              gpio_in => x"00", gpio_out => open, uart_tx => open,
               dbg_pc => pc_v(2), dbg_flags => flags_v(2),
               dbg_regs => regs_v(2), dbg_ram => ram_v(2));
 
@@ -73,6 +76,7 @@ begin
     generic map (PROGRAM => work.find_max_rom.PROG,
                  RAM_INIT => work.find_max_ram.INIT)
     port map (clk => clk, rst => rst, halted => halted_v(3),
+              gpio_in => x"00", gpio_out => open, uart_tx => open,
               dbg_pc => pc_v(3), dbg_flags => flags_v(3),
               dbg_regs => regs_v(3), dbg_ram => ram_v(3));
 
@@ -80,6 +84,7 @@ begin
     generic map (PROGRAM => work.call_ret_rom.PROG,
                  RAM_INIT => work.call_ret_ram.INIT)
     port map (clk => clk, rst => rst, halted => halted_v(4),
+              gpio_in => x"00", gpio_out => open, uart_tx => open,
               dbg_pc => pc_v(4), dbg_flags => flags_v(4),
               dbg_regs => regs_v(4), dbg_ram => ram_v(4));
 
@@ -87,6 +92,7 @@ begin
     generic map (PROGRAM => work.unsigned_vs_signed_rom.PROG,
                  RAM_INIT => work.unsigned_vs_signed_ram.INIT)
     port map (clk => clk, rst => rst, halted => halted_v(5),
+              gpio_in => x"00", gpio_out => open, uart_tx => open,
               dbg_pc => pc_v(5), dbg_flags => flags_v(5),
               dbg_regs => regs_v(5), dbg_ram => ram_v(5));
 
@@ -94,6 +100,7 @@ begin
     generic map (PROGRAM => work.pc_wrap_rom.PROG,
                  RAM_INIT => work.pc_wrap_ram.INIT)
     port map (clk => clk, rst => rst, halted => halted_v(6),
+              gpio_in => x"00", gpio_out => open, uart_tx => open,
               dbg_pc => pc_v(6), dbg_flags => flags_v(6),
               dbg_regs => regs_v(6), dbg_ram => ram_v(6));
 
@@ -101,6 +108,7 @@ begin
     generic map (PROGRAM => work.r0_guard_rom.PROG,
                  RAM_INIT => work.r0_guard_ram.INIT)
     port map (clk => clk, rst => rst, halted => halted_v(7),
+              gpio_in => x"00", gpio_out => open, uart_tx => open,
               dbg_pc => pc_v(7), dbg_flags => flags_v(7),
               dbg_regs => regs_v(7), dbg_ram => ram_v(7));
 

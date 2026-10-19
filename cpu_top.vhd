@@ -14,11 +14,16 @@ use work.minicpu_pkg.all;
 entity cpu_top is
   generic (
     PROGRAM  : rom_t;
-    RAM_INIT : ram_init_t);
+    RAM_INIT : ram_init_t;
+    CLK_FREQ : positive := 25_000_000;   -- UART baud reference
+    BAUD     : positive := 115_200);
   port (
     clk       : in  std_logic;
     rst       : in  std_logic;                      -- synchronous, active high
     halted    : out std_logic;
+    gpio_in   : in  byte_t;                          -- switches/buttons
+    gpio_out  : out byte_t;                          -- LEDs
+    uart_tx   : out std_logic;                       -- 8N1 serial output
     -- debug/observation ports (wires only, used by testbenches)
     dbg_pc    : out byte_t;
     dbg_flags : out std_logic_vector(3 downto 0);   -- Z N C V
@@ -45,6 +50,8 @@ architecture rtl of cpu_top is
   signal rd1, rd2, alu_b, imm_ext : byte_t := (others => '0');
   signal alu_result, ram_data, wb_data : byte_t := (others => '0');
   signal ram_addr : byte_t := (others => '0');
+  signal io_sel, mmio_we, ram_we_eff : std_logic := '0';
+  signal io_rdata, mem_data : byte_t := (others => '0');
   signal z, c, n, v : std_logic := '0';
   signal flags_q    : std_logic_vector(3 downto 0) := (others => '0');
   signal flag_d     : std_logic_vector(3 downto 0) := (others => '0');
@@ -98,10 +105,28 @@ begin
   ram_addr <= alu_result when (mem_read = '1' or mem_write = '1')
               else (others => '0');
 
+  -- Address decoder: 0x00..0xEF -> data RAM, 0xF0..0xFF -> MMIO.  The
+  -- comparison is numeric (unsigned), not lexicographic.  A LOAD/STORE in the
+  -- I/O region must never write the corresponding data RAM byte.
+  io_sel <= '1' when (mem_read = '1' or mem_write = '1') and
+                     unsigned(ram_addr) >= unsigned(IO_BASE)
+            else '0';
+  ram_we_eff <= ram_we and not io_sel;
+  mmio_we    <= ram_we and io_sel;
+
   ram_i : entity work.data_ram
     generic map (INIT => RAM_INIT)
-    port map (clk => clk, we => ram_we, addr => ram_addr,
+    port map (clk => clk, we => ram_we_eff, addr => ram_addr,
               wdata => rd2, rdata => ram_data, dbg => dbg_ram);
+
+  mmio_i : entity work.mmio
+    generic map (CLK_FREQ => CLK_FREQ, BAUD => BAUD)
+    port map (clk => clk, rst => rst, addr => ram_addr, we => mmio_we,
+              wdata => rd2, rdata => io_rdata, gpio_in => gpio_in,
+              gpio_out => gpio_out, uart_tx => uart_tx);
+
+  -- Combinational read mux, still within the single-cycle LOAD path.
+  mem_data <= io_rdata when io_sel = '1' else ram_data;
 
   flag_d <= z & n & c & v;   -- Z N C V
   flags_i : entity work.flag_reg
@@ -113,7 +138,7 @@ begin
   -- Writeback: ALU result / data RAM / PC+1 for the CALL link.
   with wb_sel select
     wb_data <= alu_result when WB_ALU,
-               ram_data   when WB_MEM,
+               mem_data   when WB_MEM,
                pc_plus1   when WB_PC1;
 
   -- Branch condition for the Phase 1 register comparator.

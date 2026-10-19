@@ -74,4 +74,17 @@ package minicpu_pkg is
 
   constant NOP_WORD  : word_t := x"F000";     -- extended function 0
   constant HALT_WORD : word_t := x"F001";     -- extended function 1 (ROM filler)
+
+  -- Memory map (Phase 3 MMIO).  Data RAM is 0x00..0xEF; 0xF0..0xFF is the
+  -- I/O region and is decoded by cpu_top/mmio, never written into data_ram.
+  -- See docs/ISA.md section 8.
+  constant RAM_LAST       : byte_t := x"EF";
+  constant IO_BASE        : byte_t := x"F0";
+  constant IO_UART_TX     : byte_t := x"F0";  -- write: transmit byte
+  constant IO_UART_STATUS : byte_t := x"F1";  -- read: bit0 = tx_busy
+  constant IO_GPIO_OUT    : byte_t := x"F2";  -- write/read: LED register
+  constant IO_GPIO_IN     : byte_t := x"F3";  -- read: synchronized inputs
+  constant IO_CYCLE_LO    : byte_t := x"F4";  -- read: free-running counter
+  constant IO_RESERVED_LO : byte_t := x"F5";
+  constant IO_RESERVED_HI : byte_t := x"FF";
 end package minicpu_pkg;

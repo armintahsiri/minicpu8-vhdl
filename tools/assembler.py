@@ -22,7 +22,12 @@ Syntax (see docs/ISA.md):
   call                target         R7 <- PC+1, absolute target
   ret / halt / nop                   extended group functions
   .org ADDR                          set ROM address (gaps NOP-filled)
-  .data ADDR, V, V, ...              initialize data RAM (does not use ROM)
+  .data ADDR, V, V, ...              initialize data RAM (does not use ROM;
+                                     ADDR range 0x00..0xEF only)
+  I/O symbols (predefined, case-insensitive): UART_TX=0xF0, UART_STATUS=0xF1,
+  GPIO_OUT=0xF2, GPIO_IN=0xF3, CYCLE_COUNT_LO=0xF4. They may be used in
+  `loadi rd, SYMBOL` and as memory offsets, e.g. `load r1, [r0+UART_STATUS]`;
+  they are encoded through the signed 6-bit field (UART_TX -> -16).
 Labels: "name:" (own line or before an instruction). Case-insensitive
 mnemonics/labels/registers. Comments: start with ";", "#", or "--".
 Errors are reported as "assembler: error: line N: message" and exit(1).
@@ -67,6 +72,26 @@ ABS_COND = {"jmp", "bz", "bnz", "bcs", "bhs", "bcc", "blo",
 NOP_WORD = (OP_EXT << 12) | FUNC["nop"]
 HALT_WORD = (OP_EXT << 12) | FUNC["halt"]
 
+# Phase 3 memory map. Data RAM is 0x00..0xEF; 0xF0..0xFF is MMIO.
+# The predefined I/O symbols name byte addresses, but they are encoded through
+# the ISA's signed 6-bit immediate/offset fields. For example UART_TX=0xF0 is
+# passed to the hardware as -16, which sign-extends back to 0xF0.
+RAM_LAST = 0xEF
+IO_BASE = 0xF0
+IO_SYMBOLS = {
+    "uart_tx":         0xF0,
+    "uart_status":     0xF1,
+    "gpio_out":        0xF2,
+    "gpio_in":         0xF3,
+    "cycle_count_lo":  0xF4,
+}
+
+
+def io_offset(name):
+    """Signed 8-bit value of an I/O symbol (0xF0 -> -16)."""
+    addr = IO_SYMBOLS[name]
+    return addr - 256 if addr >= 0x80 else addr
+
 # Every opcode constant exposed for the consistency checker.
 OPCODES = {
     "ADD": OP_ADD, "SUB": OP_SUB, "AND": OP_AND, "OR": OP_OR,
@@ -83,7 +108,8 @@ LOAD_LAYOUT = "destination rd = bits [11:9], base rs = bits [8:6], imm6 = bits [
 LABEL_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*")
 REG_RE = re.compile(r"^[rR]([0-7])$")
 MEM_RE = re.compile(
-    r"^\[\s*([rR][0-7])\s*(?:([+-])\s*(0[xX][0-9A-Fa-f]+|[+-]?[0-9]+))?\s*\]$")
+    r"^\[\s*([rR][0-7])\s*(?:([+-])\s*"
+    r"(0[xX][0-9A-Fa-f]+|[+-]?[0-9]+|[A-Za-z_][A-Za-z0-9_]*))?\s*\]$")
 INT_RE = re.compile(r"^[+-]?(?:0[xX][0-9A-Fa-f]+|[0-9]+)$")
 NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -128,6 +154,23 @@ def num(tok, lineno, lo, hi, what):
     return v
 
 
+def imm6_operand(tok, lineno, what):
+    """A numeric imm6, or a predefined I/O symbol converted to its signed
+    equivalent. I/O symbols are only meaningful for LOADI and memory offsets;
+    arithmetic (ADDI/SUBI) rejects them explicitly."""
+    if NAME_RE.match(tok):
+        name = tok.lower()
+        if name not in IO_SYMBOLS:
+            raise AsmError(lineno, f"unknown symbol '{tok}' for {what}")
+        v = io_offset(name)
+        if not -32 <= v <= 31:
+            raise AsmError(lineno, f"I/O symbol '{tok}' (address 0x"
+                                   f"{IO_SYMBOLS[name]:02X}, offset {v}) does "
+                                   f"not fit in imm6")
+        return v
+    return num(tok, lineno, -32, 31, what)
+
+
 def strip_comment(line):
     for c in (";", "#", "--"):
         line = line.split(c)[0]
@@ -153,7 +196,8 @@ def split_line(code):
 
 
 def parse_mem(op, lineno):
-    """Parse '[rs + imm]' -> (rs, imm6), imm in -32..31."""
+    """Parse '[rs + imm]' -> (rs, imm6), imm in -32..31.
+    The offset may be numeric or a predefined I/O symbol (e.g. [r0+UART_TX])."""
     m = MEM_RE.match(op)
     if not m:
         raise AsmError(lineno, f"expected memory operand '[rs + imm]', got '{op}'")
@@ -162,7 +206,14 @@ def parse_mem(op, lineno):
         imm = 0
     else:
         sign = 1 if m.group(2) == "+" else -1
-        imm = sign * parse_int(m.group(3), lineno, "memory offset")
+        tok = m.group(3)
+        if NAME_RE.match(tok):
+            name = tok.lower()
+            if name not in IO_SYMBOLS:
+                raise AsmError(lineno, f"unknown symbol '{tok}' in memory offset")
+            imm = sign * io_offset(name)
+        else:
+            imm = sign * parse_int(tok, lineno, "memory offset")
     if not -32 <= imm <= 31:
         raise AsmError(lineno, f"memory offset {imm} out of range -32..31")
     return base, imm
@@ -172,6 +223,8 @@ def abs_target(tok, labels, lineno):
     """Absolute jump/branch/call target: label or 0..255 numeric address."""
     if NAME_RE.match(tok):
         name = tok.lower()
+        if name in IO_SYMBOLS:
+            raise AsmError(lineno, f"I/O symbol '{tok}' is not a jump target")
         if name not in labels:
             raise AsmError(lineno, f"undefined label '{tok}'")
         addr = labels[name]
@@ -186,6 +239,8 @@ def rel_offset(tok, labels, lineno, addr):
     """BEQ/BNE offset: label (computed) or a raw signed numeric offset."""
     if NAME_RE.match(tok):
         name = tok.lower()
+        if name in IO_SYMBOLS:
+            raise AsmError(lineno, f"I/O symbol '{tok}' is not a branch target")
         if name not in labels:
             raise AsmError(lineno, f"undefined label '{tok}'")
         off = labels[name] - (addr + 1)
@@ -215,6 +270,8 @@ def first_pass(text):
             if not m:
                 break
             name = m.group(1).lower()
+            if name in IO_SYMBOLS:
+                raise AsmError(lineno, f"label '{name}' is a reserved I/O symbol")
             if name in labels:
                 raise AsmError(lineno, f"duplicate label '{name}'")
             labels[name] = pc
@@ -238,14 +295,16 @@ def first_pass(text):
         if mnem == ".data":
             if len(ops) < 2:
                 raise AsmError(lineno, ".data needs an address and at least one byte")
-            base = num(ops[0], lineno, 0, 255, ".data address")
+            base = num(ops[0], lineno, 0, RAM_LAST, ".data address")
             for i, tok in enumerate(ops[1:]):
                 v = parse_int(tok, lineno, ".data byte")
                 if not -128 <= v <= 255:
                     raise AsmError(lineno, f".data byte {v} out of range -128..255")
-                if base + i > 255:
-                    raise AsmError(lineno, f".data runs past address 255 "
-                                           f"(starts at {base}, {len(ops)-1} bytes)")
+                if base + i > RAM_LAST:
+                    raise AsmError(lineno, f".data runs into the I/O region: "
+                                           f"byte at 0x{base+i:02X}, RAM ends at "
+                                           f"0x{RAM_LAST:02X} "
+                                           f"(0x{IO_BASE:02X}..0xFF is MMIO)")
                 data.append((lineno, base + i, v & 0xFF))
             continue
 
@@ -287,13 +346,16 @@ def encode(instr, labels):
         if len(ops) != 2:
             raise AsmError(lineno, "loadi needs 2 operands: loadi rd, imm")
         rd = reg(ops[0], lineno)
-        imm = num(ops[1], lineno, -32, 31, "loadi immediate")
+        imm = imm6_operand(ops[1], lineno, "loadi immediate")
         return (OP_LOADI << 12) | (rd << 9) | (imm & 0x3F)
 
     if mnem == "addi":
         if len(ops) != 3:
             raise AsmError(lineno, "addi needs 3 operands: addi rd, rs, imm")
         rd, rs = reg(ops[0], lineno), reg(ops[1], lineno)
+        if NAME_RE.match(ops[2]) and ops[2].lower() in IO_SYMBOLS:
+            raise AsmError(lineno, f"I/O symbol '{ops[2]}' is an address, not "
+                                   f"an arithmetic immediate")
         imm = num(ops[2], lineno, -32, 31, "addi immediate")
         return (OP_ADDI << 12) | (rd << 9) | (rs << 6) | (imm & 0x3F)
 
@@ -301,6 +363,9 @@ def encode(instr, labels):
         if len(ops) != 3:
             raise AsmError(lineno, "subi needs 3 operands: subi rd, rs, k")
         rd, rs = reg(ops[0], lineno), reg(ops[1], lineno)
+        if NAME_RE.match(ops[2]) and ops[2].lower() in IO_SYMBOLS:
+            raise AsmError(lineno, f"I/O symbol '{ops[2]}' is an address, not "
+                                   f"an arithmetic immediate")
         k = parse_int(ops[2], lineno, "subi immediate")
         if not -31 <= k <= 32:
             raise AsmError(lineno, f"subi immediate {k} out of range -31..32 "

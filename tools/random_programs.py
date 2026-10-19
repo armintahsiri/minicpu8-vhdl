@@ -36,6 +36,8 @@ class GeneratedProgram:
     index: int
     name: str
     asm: str
+    gpio_in: int = 0
+    mode: str = "normal"
 
 
 def _reg(rng, allow_r0=True):
@@ -75,15 +77,22 @@ def normal_instr(rng, safe=False):
     if k == "cmp":
         return f"cmp r{s1}, r{s2}"
     if k == "load":
-        return f"load r{d}, [r{s1}{_imm_text(rng)}]"
+        return f"load r{d}, {_safe_mem_operand(rng)}"
     if k == "store":
-        return f"store r{s2}, [r{s1}{_imm_text(rng)}]"
+        return f"store r{s2}, {_safe_mem_operand(rng)}"
     raise AssertionError(k)
 
 
 def _imm_text(rng):
     v = rng.randint(-16, 16)
     return ("+" if v >= 0 else "-") + str(abs(v))
+
+
+def _safe_mem_operand(rng):
+    """A memory operand that is statically guaranteed to stay in RAM
+    (0x00..0x1F): base R0 plus a non-negative offset. This keeps the normal
+    fuzz mode completely away from the I/O region 0xF0..0xFF."""
+    return f"[r0+{rng.randint(0, 31)}]"
 
 
 def mandatory_instr(rng, kind):
@@ -107,9 +116,9 @@ def mandatory_instr(rng, kind):
     if kind == "cmp":
         return f"cmp r{s1}, r{s2}"
     if kind == "load":
-        return f"load r{d}, [r{s1}{_imm_text(rng)}]"
+        return f"load r{d}, {_safe_mem_operand(rng)}"
     if kind == "store":
-        return f"store r{s2}, [r{s1}{_imm_text(rng)}]"
+        return f"store r{s2}, {_safe_mem_operand(rng)}"
     raise AssertionError(kind)
 
 
@@ -170,9 +179,11 @@ def generate_one(index, seed):
     labels_at = {}
     label_no = 0
 
-    # Data RAM: a small random array at a low-ish address.
-    data_base = rng.randint(16, 40)
-    data_len = rng.randint(8, 20)
+    # Data RAM: a small random array in the low, RAM-only region. All
+    # generated LOAD/STORE operands use R0 with offsets 0..31, so the normal
+    # fuzz mode can never touch MMIO 0xF0..0xFF.
+    data_base = rng.randint(0, 16)
+    data_len = rng.randint(8, 16)
     data_vals = [rng.randint(-128, 255) for _ in range(data_len)]
 
     # Slot 0 is always a CALL so every program exercises CALL/RET.
@@ -226,13 +237,71 @@ def generate_one(index, seed):
     lines.append("        ret")
 
     lines.append("nested:")
-    lines.append("        store r7, [r0-6]")   # RAM[250], clear of the data array
-    lines.append("        call leaf_safe")     # memory-free: cannot clobber RAM[250]
-    lines.append("        load r7, [r0-6]")
+    lines.append("        store r7, [r0-32]")  # RAM[0xE0], clear of data and MMIO
+    lines.append("        call leaf_safe")     # memory-free: cannot clobber RAM[0xE0]
+    lines.append("        load r7, [r0-32]")
     lines.append("        ret")
 
     asm = "\n".join(lines) + "\n"
     return GeneratedProgram(index=index, name=f"fuzz_{index:03d}", asm=asm)
+
+
+def generate_io_one(index, seed):
+    """Dedicated I/O-fuzz program: UART polling, a write-while-busy that must
+    be ignored, GPIO_IN -> NOT -> GPIO_OUT, and a cycle-counter read. The
+    valid UART bytes are the first and third .data bytes; the second write is
+    issued immediately and must be dropped by the busy transmitter."""
+    rng = random.Random((seed * 7919) ^ (index * 104729 + 31))
+    b0, b1, b2 = (rng.randint(0, 255) for _ in range(3))
+    gpio = (seed + index * 53) & 0xFF
+    lines = [
+        f"; I/O fuzz program {index} (seed {seed}, gpio_in=0x{gpio:02X})",
+        f".data 16, {b0}, {b1}, {b2}",
+        "main:",
+        "        loadi r1, UART_STATUS",
+        "        loadi r2, UART_TX",
+        "        loadi r3, GPIO_OUT",
+        "        loadi r4, GPIO_IN",
+        "        loadi r5, CYCLE_COUNT_LO",
+        "        loadi r6, 16",
+        "        load r7, [r6+0]",
+        "        store r7, [r2+0]      ; valid first byte",
+        "        load r7, [r6+1]",
+        "        store r7, [r2+0]      ; ignored: transmitter busy",
+        "poll0:  load r7, [r1+0]",
+        "        cmp  r7, r0           ; LOAD does not write flags",
+        "        bnz  poll0",
+        "        load r7, [r6+2]",
+        "        store r7, [r2+0]      ; valid third byte",
+        "poll1:  load r7, [r1+0]",
+        "        cmp  r7, r0",
+        "        bnz  poll1",
+        "        load r7, [r4+0]",
+        "        not  r7, r7",
+        "        store r7, [r3+0]",
+        "        load r7, [r5+0]",
+        "        store r7, [r0+0]",
+        "        halt",
+    ]
+    asm = "\n".join(lines) + "\n"
+    return GeneratedProgram(index=index, name=f"iofuzz_{index:03d}",
+                            asm=asm, gpio_in=gpio, mode="io")
+
+
+def generate_io_programs(count, seed=20251019):
+    programs = [generate_io_one(i, seed) for i in range(count)]
+    for p in programs:
+        try:
+            assembler.assemble_with_data(p.asm)
+        except assembler.AsmError as e:
+            raise RuntimeError(f"generated I/O program {p.name} does not "
+                               f"assemble: {e}\n{p.asm}")
+        required = ("UART_TX", "UART_STATUS", "GPIO_OUT", "GPIO_IN",
+                    "CYCLE_COUNT_LO", "poll0", "poll1")
+        missing = [x for x in required if x not in p.asm]
+        if missing:
+            raise RuntimeError("I/O generator missing: " + ", ".join(missing))
+    return programs
 
 
 def generate_programs(count, seed=20251019):
@@ -274,9 +343,14 @@ def main():
     ap = argparse.ArgumentParser(description="MiniCPU-8 random program generator")
     ap.add_argument("--count", type=int, default=20)
     ap.add_argument("--seed", type=int, default=20251019)
+    ap.add_argument("--io", action="store_true",
+                    help="generate MMIO/UART/GPIO polling programs instead")
     ap.add_argument("--out", help="write .asm files to this directory")
     args = ap.parse_args()
-    programs = generate_programs(args.count, args.seed)
+    if args.io:
+        programs = generate_io_programs(args.count, args.seed)
+    else:
+        programs = generate_programs(args.count, args.seed)
     if args.out:
         os.makedirs(args.out, exist_ok=True)
         for p in programs:
