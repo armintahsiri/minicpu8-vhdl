@@ -30,16 +30,19 @@ SRC_UNITS := alu register_file flag_reg pc instr_rom data_ram branch_cond \
 TB_UNITS  := uart_rx_model alu_tb register_file_tb flag_reg_tb pc_tb \
              instr_rom_tb data_ram_tb branch_cond_tb alu_compare_tb \
              control_unit_tb uart_tx_tb gpio_tb cycle_counter_tb mmio_tb \
-             cpu_tb cpu_edge_tb reset_gating_tb io_cpu_tb
+             cpu_tb cpu_edge_tb reset_gating_tb io_cpu_tb \
+             uart_demo_tb hello_tb fibonacci_tb primes_tb gpio_demo_tb
 
 PROGS := sum1to10 shift_branch array_sum find_max call_ret \
-         unsigned_vs_signed pc_wrap r0_guard
+         unsigned_vs_signed pc_wrap r0_guard \
+         hello fibonacci primes gpio_demo
 GEN_UNITS := $(addsuffix _rom,$(PROGS))
 GEN := $(addsuffix .vhd,$(GEN_UNITS))
 
 RUN := alu_tb register_file_tb flag_reg_tb pc_tb instr_rom_tb data_ram_tb \
        branch_cond_tb alu_compare_tb control_unit_tb uart_tx_tb gpio_tb \
-       cycle_counter_tb mmio_tb cpu_tb cpu_edge_tb reset_gating_tb io_cpu_tb
+       cycle_counter_tb mmio_tb cpu_tb cpu_edge_tb reset_gating_tb io_cpu_tb \
+       hello_tb fibonacci_tb primes_tb gpio_demo_tb
 
 ALL_STAMPS := $(addprefix $(STAMPS)/,$(addsuffix .stamp,$(PKG_UNITS) $(SRC_UNITS) $(GEN_UNITS) $(TB_UNITS)))
 
@@ -110,6 +113,10 @@ $(eval $(call vhdl_rule,call_ret_rom,call_ret_rom.vhd $(STAMPS)/minicpu_pkg.stam
 $(eval $(call vhdl_rule,unsigned_vs_signed_rom,unsigned_vs_signed_rom.vhd $(STAMPS)/minicpu_pkg.stamp))
 $(eval $(call vhdl_rule,pc_wrap_rom,pc_wrap_rom.vhd $(STAMPS)/minicpu_pkg.stamp))
 $(eval $(call vhdl_rule,r0_guard_rom,r0_guard_rom.vhd $(STAMPS)/minicpu_pkg.stamp))
+$(eval $(call vhdl_rule,hello_rom,hello_rom.vhd $(STAMPS)/minicpu_pkg.stamp))
+$(eval $(call vhdl_rule,fibonacci_rom,fibonacci_rom.vhd $(STAMPS)/minicpu_pkg.stamp))
+$(eval $(call vhdl_rule,primes_rom,primes_rom.vhd $(STAMPS)/minicpu_pkg.stamp))
+$(eval $(call vhdl_rule,gpio_demo_rom,gpio_demo_rom.vhd $(STAMPS)/minicpu_pkg.stamp))
 $(eval $(call vhdl_rule,alu_tb,alu_tb.vhd $(STAMPS)/minicpu_pkg.stamp $(STAMPS)/alu.stamp))
 $(eval $(call vhdl_rule,register_file_tb,register_file_tb.vhd $(STAMPS)/minicpu_pkg.stamp $(STAMPS)/register_file.stamp))
 $(eval $(call vhdl_rule,flag_reg_tb,flag_reg_tb.vhd $(STAMPS)/minicpu_pkg.stamp $(STAMPS)/flag_reg.stamp))
@@ -128,6 +135,11 @@ $(eval $(call vhdl_rule,cpu_tb,cpu_tb.vhd $(STAMPS)/minicpu_pkg.stamp $(STAMPS)/
 $(eval $(call vhdl_rule,cpu_edge_tb,cpu_edge_tb.vhd $(STAMPS)/minicpu_pkg.stamp $(STAMPS)/cpu_top.stamp))
 $(eval $(call vhdl_rule,reset_gating_tb,reset_gating_tb.vhd $(STAMPS)/minicpu_pkg.stamp $(STAMPS)/cpu_top.stamp))
 $(eval $(call vhdl_rule,io_cpu_tb,io_cpu_tb.vhd $(STAMPS)/minicpu_pkg.stamp $(STAMPS)/cpu_top.stamp $(STAMPS)/uart_rx_model.stamp))
+$(eval $(call vhdl_rule,uart_demo_tb,uart_demo_tb.vhd $(STAMPS)/minicpu_pkg.stamp $(STAMPS)/cpu_top.stamp $(STAMPS)/uart_rx_model.stamp))
+$(eval $(call vhdl_rule,hello_tb,hello_tb.vhd $(STAMPS)/minicpu_pkg.stamp $(STAMPS)/uart_demo_tb.stamp $(STAMPS)/hello_rom.stamp))
+$(eval $(call vhdl_rule,fibonacci_tb,fibonacci_tb.vhd $(STAMPS)/minicpu_pkg.stamp $(STAMPS)/uart_demo_tb.stamp $(STAMPS)/fibonacci_rom.stamp))
+$(eval $(call vhdl_rule,primes_tb,primes_tb.vhd $(STAMPS)/minicpu_pkg.stamp $(STAMPS)/uart_demo_tb.stamp $(STAMPS)/primes_rom.stamp))
+$(eval $(call vhdl_rule,gpio_demo_tb,gpio_demo_tb.vhd $(STAMPS)/minicpu_pkg.stamp $(STAMPS)/cpu_top.stamp $(STAMPS)/gpio_demo_rom.stamp))
 
 # ---- run everything ------------------------------------------------------
 test: asmtest simtest consistency programs $(ALL_STAMPS)
