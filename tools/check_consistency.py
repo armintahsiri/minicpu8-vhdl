@@ -8,7 +8,7 @@ The single sources of truth are:
   * cpu_top.vhd          -- the datapath field wiring
 
 This script parses the tables and fails (exit 1) on any mismatch.  It is run
-by `make test`, so the three copies can never drift silently.
+by `make test`, so the copies can never drift silently.
 """
 import os
 import re
@@ -38,47 +38,40 @@ def read(rel):
         return f.read()
 
 
-def parse_opcode_constants(text):
-    consts = {}
-    for name, bits in re.findall(
-            r'constant\s+(OPC_[A-Z0-9_]+)\s*:\s*opcode_t\s*:=\s*"([01]{4})"', text):
-        consts[name] = int(bits, 2)
-    return consts
+def normalize(s):
+    return re.sub(r"\s+", "", s).lower()
 
 
-def parse_doc_opcode_table(text):
-    """Return {mnemonic_lower: opcode} from the markdown opcode table."""
+def section(text, start, end):
+    i = text.index(start)
+    j = text.index(end, i)
+    return text[i:j]
+
+
+def parse_constants(text):
+    """Return {name: (type, int_value)} for OPC_/FUNC_/COND_ constants."""
+    out = {}
+    pat = (r'constant\s+((?:OPC|FUNC|COND)_[A-Z0-9_]+)\s*:\s*'
+           r'(opcode_t|func_t|cond_code_t)\s*:=\s*"([01]+)"')
+    for name, typ, bits in re.findall(pat, text):
+        out[name] = (typ, int(bits, 2), len(bits))
+    return out
+
+
+def parse_doc_table(sec):
+    """Parse markdown rows '| `0xN` | MNEMONIC ...' -> {opcode: mnemonic}."""
     rows = {}
-    for line in text.splitlines():
+    for line in sec.splitlines():
         m = re.match(r'^\|\s*`0x([0-9A-Fa-f])`\s*\|\s*([^|]+?)\s*\|', line)
         if not m:
             continue
-        opcode = int(m.group(1), 16)
-        mnem = m.group(2).strip()
-        mnem = mnem.replace("`", "").replace("*", "").strip().split()[0].lower()
-        if mnem.startswith("reserved") or mnem in ("-", ""):
+        value = int(m.group(1), 16)
+        label = m.group(2).strip().replace("`", "").replace("*", "").strip()
+        first = label.split()[0] if label.split() else ""
+        if not first or first.lower().startswith("reserved"):
             continue
-        rows[mnem] = opcode
+        rows[value] = first
     return rows
-
-
-def assembler_opcode_table():
-    table = {}
-    for mnem, op in assembler.R3.items():
-        table[mnem] = op
-    for mnem, op in assembler.R2.items():
-        table[mnem] = op
-    for mnem, op in assembler.RI.items():
-        table[mnem] = op
-    for mnem, op in assembler.BR.items():
-        table[mnem] = op
-    table["jmp"] = assembler.OP_JMP
-    table["halt"] = assembler.OP_HALT
-    return table
-
-
-def normalize(s):
-    return re.sub(r"\s+", "", s).lower()
 
 
 print("ISA consistency check:")
@@ -88,44 +81,72 @@ doc_text = read("docs/ISA.md")
 cpu_text = read("cpu_top.vhd")
 asm_text = read("tools/assembler.py")
 
-pkg = parse_opcode_constants(pkg_text)
-doc_ops = parse_doc_opcode_table(doc_text)
-asm_ops = assembler_opcode_table()
+consts = parse_constants(pkg_text)
+doc_opcode_sec = section(doc_text, "## 2. Opcode map", "Pseudo-instructions")
+doc_cond_sec = section(doc_text, "## 3. Jump group", "### Jump-group bit layout")
+doc_func_sec = section(doc_text, "## 4. Extended group", "## 5. Flags")
+doc_ops = parse_doc_table(doc_opcode_sec)       # opcode -> MNEMONIC
+doc_conds = parse_doc_table(doc_cond_sec)       # cond   -> MNEMONIC
+doc_funcs = parse_doc_table(doc_func_sec)       # func   -> MNEMONIC
 
-ok("package defines the expected opcode constants", len(pkg) >= 14,
-   f"found {len(pkg)}")
+ok("package defines 16 opcode constants",
+   len([n for n in consts if n.startswith("OPC_")]) == 16,
+   f"found {len([n for n in consts if n.startswith('OPC_')])}")
+ok("package defines 4 extended functions",
+   len([n for n in consts if n.startswith("FUNC_")]) == 4)
+ok("package defines 10 jump-group conditions",
+   len([n for n in consts if n.startswith("COND_")]) == 10)
 
-# Hardware constant <-> assembler encoder
-for name, value in sorted(pkg.items()):
-    mnem = name[len("OPC_"):].lower()
-    if mnem not in asm_ops:
-        ok(f"pkg {name} has an assembler entry", False)
+# ---- opcode constants vs assembler and docs ------------------------------
+for name, (typ, value, width) in sorted(consts.items()):
+    if not name.startswith("OPC_"):
         continue
-    ok(f"pkg {name}=0x{value:X} matches assembler ({mnem}=0x{asm_ops[mnem]:X})",
-       asm_ops[mnem] == value,
-       f"pkg 0x{value:X} vs assembler 0x{asm_ops[mnem]:X}")
+    mnem = name[len("OPC_"):].upper()
+    ok(f"pkg {name}=0x{value:X} is a 4-bit opcode_t", typ == "opcode_t" and width == 4)
+    ok(f"assembler has {mnem}=0x{value:X}",
+       assembler.OPCODES.get(mnem) == value,
+       f"assembler has {assembler.OPCODES.get(mnem)}")
+    ok(f"docs opcode table has {mnem} at 0x{value:X}",
+       doc_ops.get(value) == mnem, f"docs has {doc_ops.get(value)}")
 
-# Hardware constant <-> docs table
-for name, value in sorted(pkg.items()):
-    mnem = name[len("OPC_"):].lower()
-    ok(f"docs table has {mnem.upper()} = 0x{value:X}",
-       doc_ops.get(mnem) == value,
-       f"docs has {doc_ops.get(mnem)}")
+ok("docs opcode table covers all 16 opcodes",
+   set(doc_ops) == set(range(16)), f"docs covers {sorted(doc_ops)}")
 
-# Every documented mnemonic must exist in hardware/assembler too (catches a
-# row that was added to ISA.md but never implemented).
-for mnem, value in sorted(doc_ops.items()):
-    if mnem in asm_ops:
-        ok(f"docs {mnem.upper()} is encoder/firmware-consistent",
-           asm_ops[mnem] == value, f"docs 0x{value:X} vs assembler 0x{asm_ops[mnem]:X}")
-    elif mnem in ("mov", "load", "store", "addi", "nop", "ret", "cmp",
-                  "subi", "call", "bz", "bnz", "bcs", "bhs", "bcc", "blo",
-                  "bn", "bnn", "blt", "bge"):
-        # Phase 2 pseudo/extended instructions are checked in the Phase 2
-        # section below; do not fail the Phase 1 table on them.
-        pass
-    else:
-        ok(f"docs mnemonic {mnem} is implemented", False)
+# ---- extended function constants vs assembler and docs -------------------
+for name, (typ, value, width) in sorted(consts.items()):
+    if not name.startswith("FUNC_"):
+        continue
+    mnem = name[len("FUNC_"):].lower()
+    ok(f"pkg {name}={value} is a 3-bit func_t", typ == "func_t" and width == 3)
+    ok(f"assembler has function {mnem}={value}",
+       assembler.FUNC.get(mnem) == value,
+       f"assembler has {assembler.FUNC.get(mnem)}")
+    ok(f"docs function table has {mnem.upper()} at {value}",
+       doc_funcs.get(value) == mnem.upper(), f"docs has {doc_funcs.get(value)}")
+
+# ---- jump-group condition constants vs assembler and docs ----------------
+for name, (typ, value, width) in sorted(consts.items()):
+    if not name.startswith("COND_"):
+        continue
+    mnem = name[len("COND_"):].lower()
+    ok(f"pkg {name}=0x{value:X} is a 4-bit cond_code_t",
+       typ == "cond_code_t" and width == 4)
+    ok(f"assembler has condition {mnem}=0x{value:X}",
+       assembler.COND.get(mnem) == value,
+       f"assembler has {assembler.COND.get(mnem)}")
+    ok(f"docs condition table has {mnem.upper()} at 0x{value:X}",
+       doc_conds.get(value) == mnem.upper(), f"docs has {doc_conds.get(value)}")
+
+ok("BCS/BHS are aliases", assembler.COND.get("bcs") == assembler.COND.get("bhs"))
+ok("BCC/BLO are aliases", assembler.COND.get("bcc") == assembler.COND.get("blo"))
+ok("docs shows BCS before its BHS alias", doc_conds.get(3) == "BCS")
+ok("docs shows BCC before its BLO alias", doc_conds.get(4) == "BCC")
+
+# ---- special words --------------------------------------------------------
+ok("NOP_WORD is 0xF000", 'constant NOP_WORD  : word_t := x"F000"' in pkg_text)
+ok("HALT_WORD is 0xF001", 'constant HALT_WORD : word_t := x"F001"' in pkg_text)
+ok("assembler NOP_WORD matches package", assembler.NOP_WORD == 0xF000)
+ok("assembler HALT_WORD matches package", assembler.HALT_WORD == 0xF001)
 
 # ---- BEQ/BNE operand layout: rt lives in the rd field --------------------
 # The assembler must encode beq r5,r5,+1 as 0xAB41: op=A, "rd"=5 (rt),
@@ -134,21 +155,38 @@ beq_word = assembler.assemble("beq r5, r5, 1")[0]
 ok("assembler puts BEQ rt in the rd field (0xAB41)", beq_word == 0xAB41,
    f"got 0x{beq_word:04X}")
 ok("ISA.md documents the 0xAB41 layout example", "0xAB41" in doc_text)
-layout_marker = ("BEQ/BNE layout: rs = bits [8:6], rt = bits [11:9] "
-                 "(rd field), imm6 = bits [5:0]")
-doc_norm = normalize(doc_text)
 ok("ISA.md contains the normative BEQ/BNE layout marker",
-   normalize(layout_marker) in doc_norm)
+   normalize(assembler.BEQ_BNE_LAYOUT) in normalize(doc_text))
+ok("assembler source documents the rd-field trick",
+   "rt" in asm_text and "rd field" in asm_text.lower())
 
-# cpu_top must read rs on port 1 and select the rd field for the second
+# cpu_top reads rs on port 1 and selects the rd field for the second
 # BEQ/BNE comparand.
 cpu_norm = normalize(cpu_text)
 ok("cpu_top reads rs field [8:6] on register port 1",
-   "raddr1=>instr(8downto6)" in cpu_norm)
-ok("cpu_top selects rd field [11:9] for BEQ/BNE second comparand",
-   "addr2<=instr(11downto9)when(branch=br_beqorbranch=br_bne)" in cpu_norm)
-ok("assembler source documents the rd-field trick",
-   "rt" in asm_text and "rd field" in asm_text.lower())
+   "raddr1=>instr(8downto6)" in cpu_norm or "addr1<=instr(8downto6)" in cpu_norm)
+ok("cpu_top uses control's rd2_from_rd to select bits [11:9]",
+   "addr2<=instr(11downto9)whenrd2_from_rd='1'elseinstr(5downto3)" in cpu_norm)
+
+# ---- STORE / LOAD layouts ------------------------------------------------
+store_word = assembler.assemble("store r7, [r1-32]")[0]
+ok("assembler puts STORE data register in the rd field (0xDE60)",
+   store_word == 0xDE60, f"got 0x{store_word:04X}")
+ok("ISA.md contains the normative STORE layout marker",
+   normalize(assembler.STORE_LAYOUT) in normalize(doc_text))
+load_word = assembler.assemble("load r3, [r4+7]")[0]
+ok("assembler LOAD layout example (0x8707)", load_word == 0x8707,
+   f"got 0x{load_word:04X}")
+ok("ISA.md contains the normative LOAD layout marker",
+   normalize(assembler.LOAD_LAYOUT) in normalize(doc_text))
+
+# ---- data RAM / CALL-RET conventions in spec and package -----------------
+ok("package defines a 256-byte ram_t",
+   "typeram_tisarray(0to255)ofbyte_t" in normalize(pkg_text))
+ok("ISA.md documents 256 x 8 data RAM", "256 bytes" in doc_text and "8-bit address" in doc_text)
+ok("ISA.md documents address wrap", "(rs + sext(imm6)) mod 256" in doc_text)
+ok("ISA.md documents the R7 link convention", "R7 <- (PC+1) mod 256" in doc_text)
+ok("ISA.md documents no hardware stack", "no hardware stack" in doc_text.lower())
 
 print()
 if failures:
