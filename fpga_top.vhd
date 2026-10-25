@@ -12,7 +12,8 @@ use ieee.std_logic_1164.all;
 entity fpga_top is
   generic (
     CLK_FREQ : positive := 12_000_000;   -- HX8K breakout 12 MHz oscillator
-    BAUD     : positive := 115_200);
+    BAUD     : positive := 115_200;
+    LOAD_STALL : boolean := false);      -- EXPERIMENT: sync RAM read latency
   port (
     clk     : in  std_logic;
     rst_n   : in  std_logic;                       -- active-low user button
@@ -45,7 +46,8 @@ begin
       RAM_INIT => work.fpga_program.RAM_INIT,
       CLK_FREQ => CLK_FREQ,
       BAUD     => BAUD,
-      DEBUG    => false)
+      DEBUG    => false,
+      LOAD_STALL => LOAD_STALL)
     port map (
       clk       => clk,
       rst       => rst,

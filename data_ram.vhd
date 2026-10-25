@@ -13,7 +13,8 @@ use work.minicpu_pkg.all;
 entity data_ram is
   generic (
     INIT  : ram_init_t;
-    DEBUG : boolean := true);
+    DEBUG : boolean := true;
+    SYNC_READ : boolean := false);
   port (
     clk   : in  std_logic;
     we    : in  std_logic;
@@ -46,15 +47,29 @@ begin
     end if;
   end process;
 
-  -- Asynchronous read; is_x guard avoids a metavalue warning in the first
-  -- delta cycle, before the address has settled.
-  read_p : process (all) is
-  begin
-    rdata <= (others => '0');
-    if not is_x(addr) then
-      rdata <= mem(to_integer(unsigned(addr)));
-    end if;
-  end process;
+  async_read_gen : if not SYNC_READ generate
+    -- is_x guard avoids a metavalue warning before the address settles.
+    read_p : process (all) is
+    begin
+      rdata <= (others => '0');
+      if not is_x(addr) then
+        rdata <= mem(to_integer(unsigned(addr)));
+      end if;
+    end process;
+  end generate;
+
+  sync_read_gen : if SYNC_READ generate
+    read_p : process (clk) is
+    begin
+      if rising_edge(clk) then
+        if not is_x(addr) then
+          rdata <= mem(to_integer(unsigned(addr)));
+        else
+          rdata <= (others => '0');
+        end if;
+      end if;
+    end process;
+  end generate;
 
   -- The full debug view is useful in simulation but prevents RAM inference in
   -- GHDL/Yosys (it forces every cell to be individually readable). Board

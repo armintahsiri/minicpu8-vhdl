@@ -17,7 +17,8 @@ entity cpu_top is
     RAM_INIT : ram_init_t;
     CLK_FREQ : positive := 25_000_000;   -- UART baud reference
     BAUD     : positive := 115_200;
-    DEBUG    : boolean := true);         -- expose full data-RAM debug view
+    DEBUG    : boolean := true;          -- expose full data-RAM debug view
+    LOAD_STALL : boolean := false);     -- EXPERIMENT: sync RAM read latency
   port (
     clk       : in  std_logic;
     rst       : in  std_logic;                      -- synchronous, active high
@@ -57,10 +58,31 @@ architecture rtl of cpu_top is
   signal flags_q    : std_logic_vector(3 downto 0) := (others => '0');
   signal flag_d     : std_logic_vector(3 downto 0) := (others => '0');
   signal rf_we, ram_we, flag_en : std_logic := '0';
+  signal load_wait_q, load_stall_active : std_logic := '0';
+  signal pc_en : std_logic := '1';
 begin
 
+  -- EXPERIMENT: every LOAD, including an MMIO read, holds the current
+  -- instruction for one extra cycle. The RAM's registered read is valid
+  -- during the second interval, when the destination write is enabled.
+  load_stall_active <= mem_read and not load_wait_q when LOAD_STALL else '0';
+  pc_en <= (not halt_int) and (not load_stall_active);
+
+  load_wait_p : process (clk) is
+  begin
+    if rising_edge(clk) then
+      if rst = '1' then
+        load_wait_q <= '0';
+      elsif LOAD_STALL then
+        load_wait_q <= load_stall_active;
+      else
+        load_wait_q <= '0';
+      end if;
+    end if;
+  end process;
+
   pc_i : entity work.pc
-    port map (clk => clk, rst => rst, en => not halt_int, load => pc_load,
+    port map (clk => clk, rst => rst, en => pc_en, load => pc_load,
               target => pc_target, q => pc_q);
 
   rom_i : entity work.instr_rom
@@ -85,7 +107,7 @@ begin
   waddr <= "111" when link = '1' else instr(11 downto 9);
 
   -- Reset suppresses all architectural writes (PC/flags have their own reset).
-  rf_we   <= reg_write and not rst;
+  rf_we   <= reg_write and not rst and not load_stall_active;
   ram_we  <= mem_write and not rst;
   flag_en <= flag_write and not rst;
 
@@ -116,7 +138,7 @@ begin
   mmio_we    <= ram_we and io_sel;
 
   ram_i : entity work.data_ram
-    generic map (INIT => RAM_INIT, DEBUG => DEBUG)
+    generic map (INIT => RAM_INIT, DEBUG => DEBUG, SYNC_READ => LOAD_STALL)
     port map (clk => clk, we => ram_we_eff, addr => ram_addr,
               wdata => rd2, rdata => ram_data, dbg => dbg_ram);
 

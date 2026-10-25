@@ -70,3 +70,28 @@ additional cycle per executed LOAD.
 - Run the full default configuration regression suite on this branch too.
 - Keep all experimental RTL and reports on `exp-bram`; do not merge the
   implementation into `main`.
+
+## Results (2026-10-25)
+
+Yosys inferred one `SB_RAM40_4K`. The synchronous hello design used 395 LC,
+139 FF, 279 LUT4, 29 CARRY and one BRAM. Against the default hello build, this
+saves 3,802 LC and 1,893 FF. In eight PnR seeds, HX8K routed at 53.09–57.65
+MHz (median 56.26), and UP5K routed at 18.92–20.51 MHz (median 19.98). Every
+UP5K seed passed the 12 MHz timing constraint and failed a 50 MHz constraint.
+Per-seed data and path details are in the EXPERIMENT section of
+`docs/AUDIT.md`.
+
+The model's `load_stall` parameter accounts for the extra LOAD interval and
+MMIO sampling edge. Hand-derived CPU checks pass under both simulators. The
+finite demo set (14 programs) and quick/full ALU/RAM and I/O fuzz sets match
+the experimental model under NVC and GHDL; 5/5 targeted stall mutations are
+caught. The infinite `hw_selftest` was separately simulated under the option
+and emitted `OK\n` while reaching the GPIO pattern. Programs that read the
+cycle counter can observe its changed value; `load_stall_demo` does so on
+purpose. UART busy polling and cycle totals can therefore change even when
+program output is unchanged.
+
+This is synthesis and PnR evidence only. No iCEBreaker or HX8K hardware was
+programmed. The current recommendation in `docs/BRINGUP.md` remains the
+default configuration on HX8K for first hardware bring-up; the UP5K result is
+a promising but behavior-changing experiment, not a merged default.

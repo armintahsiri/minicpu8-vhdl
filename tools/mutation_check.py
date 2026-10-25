@@ -29,7 +29,7 @@ MUTATIONS = [
     (10, "MMIO lower-bound decode", "cpu_top.vhd", "unsigned(ram_addr) >= unsigned(IO_BASE)", "unsigned(ram_addr) > unsigned(IO_BASE)"),
     (11, "UART busy write policy", "mmio.vhd", "addr = IO_UART_TX and uart_busy = '0'", "addr = IO_UART_TX"),
     (12, "GPIO synchronizer stage", "gpio.vhd", "sync <= meta;", "sync <= pin_in;"),
-    (13, "reset register-write gate", "cpu_top.vhd", "rf_we   <= reg_write and not rst;", "rf_we   <= reg_write;"),
+    (13, "reset register-write gate", "cpu_top.vhd", "rf_we   <= reg_write and not rst and not load_stall_active;", "rf_we   <= reg_write;"),
     (14, "PC reset value", "pc.vhd", "cnt <= (others => '0');", "cnt <= cnt;"),
     (15, "SHL data result", "alu.vhd", "res := ua(6 downto 0) & '0';", "res := '0' & ua(7 downto 1);"),
     (16, "CMP flag write", "control_unit.vhd", "when FUNC_CMP  => flag_write <= '1'; alu_op <= ALU_SUB;", "when FUNC_CMP  => null;"),

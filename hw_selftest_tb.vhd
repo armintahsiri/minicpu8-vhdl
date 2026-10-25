@@ -6,6 +6,7 @@ use std.env.all;
 use work.minicpu_pkg.all;
 
 entity hw_selftest_tb is
+  generic (LOAD_STALL : boolean := false);
 end entity hw_selftest_tb;
 
 architecture sim of hw_selftest_tb is
@@ -28,7 +29,8 @@ begin
   dut : entity work.cpu_top
     generic map (PROGRAM => work.hw_selftest_rom.PROG,
                  RAM_INIT => work.hw_selftest_ram.INIT,
-                 CLK_FREQ => 1_000_000, BAUD => 100_000)
+                 CLK_FREQ => 1_000_000, BAUD => 100_000,
+                 LOAD_STALL => LOAD_STALL)
     port map (clk => clk, rst => rst, halted => halted,
               gpio_in => x"00", gpio_out => gpio_out, uart_tx => uart_tx,
               dbg_pc => pc, dbg_flags => flags, dbg_regs => regs,
@@ -48,16 +50,12 @@ begin
     wait until falling_edge(clk);
     rst <= '0';
 
-    while rx_count < MAX_BYTES loop
+    while rx_count < MAX_BYTES or gpio_out /= x"0F" or regs(3) /= x"10" loop
       wait until rising_edge(clk);
       wait for 1 ns;
       cycles := cycles + 1;
       assert cycles < 2000 report "hardware self-test timed out" severity failure;
     end loop;
-    for i in 1 to 12 loop
-      wait until rising_edge(clk);
-    end loop;
-
     assert rx_data(7 downto 0) = x"4F" report "heartbeat byte 0 is not O" severity failure;
     assert rx_data(15 downto 8) = x"4B" report "heartbeat byte 1 is not K" severity failure;
     assert rx_data(23 downto 16) = x"0A" report "heartbeat byte 2 is not newline" severity failure;

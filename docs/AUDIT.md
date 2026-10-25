@@ -329,3 +329,99 @@ completed, both below 16 MHz, while the 12 MHz-target runs that did complete
 passed the requested frequency. It is not a robust board-fit result. HX8K
 completed 8/8 at 12 MHz and is the supported default target. The HX8K
 12 MHz-target bitstream built in the seed-1 route; it was 135,100 bytes.
+
+### EXPERIMENT — `exp-bram` synchronous RAM
+
+This section is experimental evidence from branch `exp-bram` (based on main
+commit `84c4289`); it is not the `main` implementation. The implementation is
+behind `LOAD_STALL : boolean := false` in `cpu_top` and `fpga_top`; synthesis
+uses `make LOAD_STALL=true`. Default behavior remains covered by the full
+suite below.
+
+The synchronous read inferred exactly one `SB_RAM40_4K`; the async-read
+mapping probe inferred no `SB_RAM40_4K`, `ICESTORM_RAM` or `ICESTORM_SPRAM`.
+The experimental hello image used 395 LC, 139 FF, 279 LUT4, 29 CARRY and 1
+BRAM for both devices. Compared with default: -3,802 LC (-90.6%), -1,893 FF
+(-93.2%), -1,907 LUT4 (-87.2%), and +1 BRAM. All experimental placements
+used 395 LC; the UP5K route report used 1/30 BRAM tiles and the HX8K report
+1/32. GHDL/Yosys/nextpnr paths and versions are the same as above.
+
+| Device | target | seed 1 | seed 2 | seed 3 | seed 4 | seed 5 | seed 6 | seed 7 | seed 8 | median / min / max / spread MHz |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| HX8K | 12 | 56.40 P | 56.12 P | 56.62 P | 57.65 P | 56.42 P | 54.90 P | 55.15 P | 53.09 P | 56.26 / 53.09 / 57.65 / 4.56 |
+| HX8K | 50 | 56.40 P | 56.12 P | 56.62 P | 57.65 P | 56.42 P | 54.90 P | 55.15 P | 53.09 P | 56.26 / 53.09 / 57.65 / 4.56 |
+| UP5K | 12 | 20.32 P | 20.51 P | 19.98 P | 19.52 P | 19.77 P | 18.92 P | 19.98 P | 20.51 P | 19.98 / 18.92 / 20.51 / 1.60 |
+| UP5K | 50 | 20.32 F | 20.51 F | 19.98 F | 19.52 F | 19.77 F | 18.92 F | 19.98 F | 20.51 F | 19.98 / 18.92 / 20.51 / 1.60 |
+
+`P`/`F` mark the final routed timing check. JSON report Fmax is the routed
+result; target constraints and placement estimates can differ, but the
+achieved per-seed Fmax values here were the same for 12 and 50 MHz. Every
+UP5K 50 MHz route failed with the same form of exact nextpnr error, e.g.:
+
+```text
+ERROR: Max frequency for clock 'clk$SB_IO_IN_$glb_clk': 20.32 MHz (FAIL at 50.00 MHz)
+```
+
+For HX8K the median-Fmax path (seed 1) ran from
+`core.dbg_pc_SB_DFFESR_Q_3_D_SB_LUT4_O_LC` to
+`core.dbg_regs_SB_DFFE_Q_34_DFFLC`, with 5.60 ns logic and 11.12 ns routing.
+Worst seed 8 ended at `core.dbg_regs_SB_DFFE_Q_29_DFFLC`, with 5.22 ns logic
+and 12.61 ns routing. For UP5K the median-Fmax seed 3 ended at
+`core.dbg_regs_SB_DFFE_Q_47_DFFLC` (15.39 ns logic, 32.04 ns routing); the
+worst seed 6 ended at `core.dbg_regs_SB_DFFE_Q_28_DFFLC` (15.39 ns logic,
+34.86 ns routing). As above, these board-wrapper paths use debug output
+registers and are estimates, not hardware timing sign-off.
+
+At the recommended HX8K 12 MHz clock, the golden model used
+`CLKS_PER_BIT=104` (12 MHz / 115,200, integer-truncated). Per-program CPI is
+cycles divided by retired non-HALT instructions; UART polling can change the
+executed instruction count because peripheral time advances during LOAD
+waits.
+
+| Program | default cycles / CPI | LOAD_STALL cycles / CPI | UART bytes / GPIO result |
+|---|---:|---:|---|
+| array_sum | 54 / 1.000 | 64 / 1.185 | same |
+| call_ret | 179 / 1.000 | 180 / 1.006 | same |
+| find_max | 32 / 1.000 | 37 / 1.156 | same |
+| gpio_demo | 6 / 1.000 | 8 / 1.333 | same, GPIO `FF` |
+| hello | 18,817 / 1.000 | 18,822 / 1.333 | 18 bytes identical |
+| fibonacci | 39,729 / 1.000 | 39,745 / 1.329 | 38 bytes identical |
+| primes | 408,065 / 1.000 | 427,552 / 1.151 | 188 bytes identical |
+| ram_wrap | 4 / 1.000 | 5 / 1.250 | same |
+| load_stall_demo | 9 / 1.000 | 12 / 1.333 | expected cycle-counter read changes `08` to `0B` |
+
+The finite demo set (14 programs; `hw_selftest` excluded because it never
+halts) matched the parameterized model for final registers, RAM, flags, UART,
+GPIO and cycle counts under NVC and GHDL with LOAD_STALL enabled. The
+hand-derived bench checks every edge for RAM LOAD, GPIO MMIO LOAD, cycle
+counter LOAD, STORE, flags and reset while a LOAD is pending. The independent
+infinite `hw_selftest` bench also passed in both simulators with LOAD_STALL,
+observing UART `OK\n` and the GPIO pattern. It does not have a final state
+comparison because it loops forever.
+
+Experimental differential fuzz results: 20 quick ALU/RAM, 8 quick I/O, 200
+full ALU/RAM and 40 full I/O programs each passed with zero mismatches under
+both NVC and GHDL. The full default suite (`make clean && make test`,
+`make test-ghdl`, `make fuzz`, `make iofuzz`, `make mutation`) passed on this
+branch after updating the existing reset-gate mutation anchor for the new
+generic logic. Existing mutations: 23/23 detected; targeted stall mutations:
+5/5 caught (PC advance, write during wait, missing wait, MMIO skip and stuck
+RAM read).
+
+UP5K verdict: default async RAM is not reliably placeable (2/8), while the
+LOAD_STALL experiment placed/routed 8/8 at 12 MHz using 395/5,280 LC and one
+BRAM, with 18.92–20.51 MHz routed Fmax. It failed timing at a 50 MHz target.
+This is promising evidence that the experiment fits iCEBreaker at its
+12 MHz oscillator, but LOAD changes peripheral-observed cycle timing and the
+cycle-counter result as designed. No board has been programmed; both PCFs
+remain labelled **UNVERIFIED on hardware**.
+
+Board references checked: the [Lattice iCE40-HX8K Breakout User Guide](https://www.latticesemi.com/view_document?document_id=50373)
+documents the CT256 device, 12 MHz oscillator, FTDI USB interface and eight
+LEDs; its schematic maps the FTDI receive signal to FPGA pin B12. The
+[iCEBreaker board documentation](https://docs.icebreaker-fpga.org/hardware/icebreaker/)
+documents UP5K-SG48, 5,280 LCs, FT2232H and 12 MHz crystal. The checked
+[YosysHQ iCEBreaker PCF](https://github.com/YosysHQ/icestorm/blob/main/examples/icebreaker/icebreaker.pcf)
+matches pins 35 clock, 10 BTN_N, 9 TX, LEDs 27/25/21/23/26 and RGB 39/40/41;
+its PMOD1A pins match 4/2/47/45/3/48/46/44. Those documents validate the
+reference pin choices, not the assembled project's wiring or operation.

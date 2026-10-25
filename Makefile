@@ -54,6 +54,7 @@ PACKAGE   ?= $(BOARD_PACKAGE)
 PCF       ?= $(BOARD_PCF)
 FREQ      ?= 12
 SEED      ?= 1
+LOAD_STALL ?= false
 
 FPGA_BUILD  := build/synth
 FPGA_PKG    := $(FPGA_BUILD)/fpga_program.vhd
@@ -80,11 +81,11 @@ TB_UNITS  := uart_rx_model alu_tb register_file_tb flag_reg_tb pc_tb \
              control_unit_tb uart_tx_tb gpio_tb cycle_counter_tb mmio_tb \
              cpu_tb cpu_edge_tb reset_gating_tb io_cpu_tb \
              uart_demo_tb hello_tb fibonacci_tb primes_tb gpio_demo_tb \
-             uart_real_divisor_tb ram_wrap_tb hw_selftest_tb
+             uart_real_divisor_tb ram_wrap_tb hw_selftest_tb load_stall_tb
 
 PROGS := sum1to10 shift_branch array_sum find_max call_ret ram_wrap \
          unsigned_vs_signed pc_wrap r0_guard \
-         hello fibonacci primes gpio_demo hw_selftest
+         hello fibonacci primes gpio_demo hw_selftest load_stall_demo
 GEN_UNITS := $(addsuffix _rom,$(PROGS))
 GEN := $(addsuffix .vhd,$(GEN_UNITS))
 
@@ -92,7 +93,7 @@ RUN := alu_tb register_file_tb flag_reg_tb pc_tb instr_rom_tb data_ram_tb \
        branch_cond_tb alu_compare_tb control_unit_tb uart_tx_tb gpio_tb \
        cycle_counter_tb mmio_tb cpu_tb cpu_edge_tb reset_gating_tb io_cpu_tb \
        hello_tb fibonacci_tb primes_tb gpio_demo_tb uart_real_divisor_tb \
-       ram_wrap_tb hw_selftest_tb
+       ram_wrap_tb hw_selftest_tb load_stall_tb
 
 ALL_STAMPS := $(addprefix $(STAMPS)/,$(addsuffix .stamp,$(PKG_UNITS) $(SRC_UNITS) $(GEN_UNITS) $(TB_UNITS)))
 
@@ -175,6 +176,7 @@ $(eval $(call vhdl_rule,fibonacci_rom,fibonacci_rom.vhd $(STAMPS)/minicpu_pkg.st
 $(eval $(call vhdl_rule,primes_rom,primes_rom.vhd $(STAMPS)/minicpu_pkg.stamp))
 $(eval $(call vhdl_rule,gpio_demo_rom,gpio_demo_rom.vhd $(STAMPS)/minicpu_pkg.stamp))
 $(eval $(call vhdl_rule,hw_selftest_rom,hw_selftest_rom.vhd $(STAMPS)/minicpu_pkg.stamp))
+$(eval $(call vhdl_rule,load_stall_demo_rom,load_stall_demo_rom.vhd $(STAMPS)/minicpu_pkg.stamp))
 $(eval $(call vhdl_rule,alu_tb,alu_tb.vhd $(STAMPS)/minicpu_pkg.stamp $(STAMPS)/alu.stamp))
 $(eval $(call vhdl_rule,register_file_tb,register_file_tb.vhd $(STAMPS)/minicpu_pkg.stamp $(STAMPS)/register_file.stamp))
 $(eval $(call vhdl_rule,flag_reg_tb,flag_reg_tb.vhd $(STAMPS)/minicpu_pkg.stamp $(STAMPS)/flag_reg.stamp))
@@ -201,6 +203,7 @@ $(eval $(call vhdl_rule,gpio_demo_tb,gpio_demo_tb.vhd $(STAMPS)/minicpu_pkg.stam
 $(eval $(call vhdl_rule,uart_real_divisor_tb,uart_real_divisor_tb.vhd $(STAMPS)/minicpu_pkg.stamp $(STAMPS)/mmio.stamp $(STAMPS)/uart_rx_model.stamp))
 $(eval $(call vhdl_rule,ram_wrap_tb,ram_wrap_tb.vhd $(STAMPS)/minicpu_pkg.stamp $(STAMPS)/cpu_top.stamp $(STAMPS)/ram_wrap_rom.stamp))
 $(eval $(call vhdl_rule,hw_selftest_tb,hw_selftest_tb.vhd $(STAMPS)/minicpu_pkg.stamp $(STAMPS)/cpu_top.stamp $(STAMPS)/hw_selftest_rom.stamp $(STAMPS)/uart_rx_model.stamp))
+$(eval $(call vhdl_rule,load_stall_tb,load_stall_tb.vhd $(STAMPS)/minicpu_pkg.stamp $(STAMPS)/cpu_top.stamp $(STAMPS)/load_stall_demo_rom.stamp))
 
 # ---- run everything ------------------------------------------------------
 test: asmtest simtest consistency diversity programs $(ALL_STAMPS)
@@ -267,7 +270,7 @@ synth: $(PROGRAM)_rom.vhd $(FPGA_PKG)
 	@test -d "$(GHDL_PREFIX)" || { echo "ERROR: GHDL_PREFIX directory missing: $(GHDL_PREFIX)"; exit 1; }
 	@set -o pipefail; \
 	$(YOSYS) -m "$(GHDL_PLUGIN)" -p \
-	  'ghdl --std=08 $(FPGA_VHDL) -e fpga_top; synth_ice40 -top fpga_top -json $(SYNTH_JSON)' \
+	  'ghdl --std=08 -gLOAD_STALL=$(LOAD_STALL) $(FPGA_VHDL) -e fpga_top; synth_ice40 -top fpga_top -json $(SYNTH_JSON)' \
 	  2>&1 | tee $(SYNTH_LOG) || { \
 	    echo "ERROR: synthesis failed. Checked GHDL=$(GHDL) GHDL_PLUGIN=$(GHDL_PLUGIN) GHDL_PREFIX=$(GHDL_PREFIX) DYLD_FALLBACK_LIBRARY_PATH=$$DYLD_FALLBACK_LIBRARY_PATH YOSYS=$(YOSYS). See $(SYNTH_LOG)."; exit 1; }
 	@echo "SYNTHESIS OK: $(SYNTH_JSON)"

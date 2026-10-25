@@ -359,6 +359,31 @@ cpu, _ = run(poll_prog, clks_per_bit=4)
 eq("UART busy polling terminates", (cpu.halted, cpu._uart_busy()), (True, 0))
 ok("UART busy polling waited", cpu.cycles > 40, f"cycles={cpu.cycles}")
 
+# ---------------- EXPERIMENT: synchronous RAM LOAD timing ----------------
+stall_prog = """
+        loadi r1, 5
+        addi r5, r1, 0
+        store r1, [r0+0]
+        load r2, [r0+0]
+        load r4, [r0+GPIO_IN]
+        halt
+"""
+default, _ = run(stall_prog, gpio_in=0xA5)
+stalled, _ = run(stall_prog, gpio_in=0xA5, load_stall=True)
+eq("LOAD_STALL demo regs", stalled.regs, default.regs)
+eq("LOAD_STALL demo RAM", stalled.ram, default.ram)
+eq("LOAD_STALL demo flags", (stalled.z, stalled.n, stalled.c, stalled.v),
+   (default.z, default.n, default.c, default.v))
+eq("LOAD_STALL RAM and GPIO loads add exactly two cycles",
+   stalled.cycles, default.cycles + 2)
+eq("LOAD_STALL RAM load result", stalled.regs[2], 5)
+eq("LOAD_STALL MMIO GPIO result", stalled.regs[4], 0xA5)
+
+counter_prog = "loadi r1, CYCLE_COUNT_LO\nload r2, [r0+CYCLE_COUNT_LO]\nhalt"
+counter, _ = run(counter_prog, load_stall=True)
+eq("LOAD_STALL cycle-counter read samples after first wait edge",
+   (counter.regs[2], counter.cycles), (2, 3))
+
 # ---------------- state is JSON serialisable ----------------
 cpu, _ = run("loadi r1, 7\nhalt")
 state = cpu.state()

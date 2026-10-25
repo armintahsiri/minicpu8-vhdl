@@ -93,7 +93,8 @@ def alu(op, a, b):
 
 class MiniCPU8:
     def __init__(self, words, ram=None, max_cycles=100000, gpio_in=0,
-                 clks_per_bit=DEFAULT_CLKS_PER_BIT, max_uart_bytes=4096):
+                 clks_per_bit=DEFAULT_CLKS_PER_BIT, max_uart_bytes=4096,
+                 load_stall=False):
         if len(words) > 256:
             raise ValueError("program exceeds 256 words")
         if clks_per_bit < 1:
@@ -124,6 +125,7 @@ class MiniCPU8:
         self.uart_busy_until = -1
         self.clks_per_bit = clks_per_bit
         self.max_uart_bytes = max_uart_bytes
+        self.load_stall = bool(load_stall)
 
     # -- helpers ---------------------------------------------------------
     def _wr(self, r, value):
@@ -217,6 +219,11 @@ class MiniCPU8:
             self._wr(rd, res)
             self._flags(z, n, c, v)
         elif op == 0x8:                    # LOAD
+            # The synchronous-RAM experiment spends one cycle reading before
+            # the architectural LOAD completion edge. MMIO also waits so its
+            # value reflects busy/cycle-counter time at commit.
+            if self.load_stall:
+                self.cycles += 1
             addr = self._addr(rs, imm)
             if addr >= IO_BASE:
                 self._wr(rd, self._io_read(addr))
@@ -302,11 +309,12 @@ class MiniCPU8:
 
 
 def run_source(text, max_cycles=100000, gpio_in=0,
-               clks_per_bit=DEFAULT_CLKS_PER_BIT, max_uart_bytes=4096):
+               clks_per_bit=DEFAULT_CLKS_PER_BIT, max_uart_bytes=4096,
+               load_stall=False):
     result = assembler.assemble_with_data(text)
     cpu = MiniCPU8(result.words, result.ram, max_cycles=max_cycles,
                    gpio_in=gpio_in, clks_per_bit=clks_per_bit,
-                   max_uart_bytes=max_uart_bytes)
+                   max_uart_bytes=max_uart_bytes, load_stall=load_stall)
     return cpu.run(), result
 
 
@@ -321,13 +329,16 @@ def main():
     ap.add_argument("--clks-per-bit", type=int, default=DEFAULT_CLKS_PER_BIT,
                     help="UART busy model: clocks per bit (default 217 = "
                          "25MHz/115200)")
+    ap.add_argument("--load-stall", action="store_true",
+                    help="EXPERIMENT: add one cycle to every LOAD")
     args = ap.parse_args()
 
     try:
         with open(args.input) as f:
             cpu, _ = run_source(f.read(), args.max_cycles,
                                 gpio_in=args.gpio_in,
-                                clks_per_bit=args.clks_per_bit)
+                                clks_per_bit=args.clks_per_bit,
+                                load_stall=args.load_stall)
     except assembler.AsmError as e:
         sys.exit(str(e))
     except OSError as e:
