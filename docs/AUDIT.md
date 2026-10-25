@@ -339,3 +339,16 @@ The first bring-up recommendation is therefore the default design on HX8K.
 The `exp-bram` UP5K result is a useful next hardware experiment if a board is
 available, but it adds one cycle to each LOAD and changes the instant at which
 MMIO reads sample counters and UART status. It remains isolated from `main`.
+
+## Final `main` verification
+
+After the documentation and board decision were committed, the final clean
+regression completed on `main` with:
+
+```sh
+make clean && make test && make test-ghdl && make fuzz && make iofuzz && make mutation
+```
+
+All NVC and GHDL testbenches passed; the 200-program ALU/RAM and 40-program
+I/O differential fuzz runs had zero mismatches; and all 23 RTL mutations were
+detected. `p4b-final` marks this verified `main` state. No push was performed.
