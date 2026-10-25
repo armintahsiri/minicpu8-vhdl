@@ -206,6 +206,11 @@ measurement checklist are in `docs/BRINGUP.md`.
 
 Current diversity is 40/40 in each mode, the checker has 165 checks, 23/23 mutations are detected, and the
 divisor-104 MMIO test passes under NVC/GHDL. CALL-link remains fuzz-only.
+The final clean NVC run (`make clean && make test`) passed in 8.99 s wall
+clock with all 28 entries in the directed testbench run list. The final
+independent GHDL run also passed every listed bench; the complete full-fuzz
+runs passed 200/200 and 40/40 programs with zero mismatches. The 23-mutation
+run had no survivors. CI YAML parses, but GitHub Actions has not been run.
 Synthesis rerun and RAM-stub comparison remain blocked by the absent
 GHDL-Yosys plugin and unavailable shell network. Historical phase-3 numbers
 must not be presented as a fresh seed sweep.
