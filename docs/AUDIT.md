@@ -246,3 +246,86 @@ Yosys 0.70+post (`0c11ea0`), nextpnr-ice40 with a Homebrew wrapper whose
 `--version` prints no version, and `icepack` installed. `brew info nextpnr`
 reported no formula named `nextpnr`; the PnR banner will be recorded from an
 actual run if available.
+
+### Default hello seed sweep and RAM cost
+
+Image and wrapper: all runs used `PROGRAM=hello`, generated from
+`programs/hello.asm` into `hello_rom.vhd`, selected by `fpga_program.vhd` and
+instantiated by `fpga_top`. Clock, reset, GPIO and UART remain external inputs
+and sequential state remains clocked; this is a live processor with the
+selected hello instruction image, not a constant-output test wrapper. The
+image is fixed at synthesis time as expected for the FPGA board build.
+
+Synthesis resources were the same across all PnR seeds: 4,197 HX8K logic
+cells, 2,186 LUT4, 2,032 FF (1,968 SB_DFFE + 37 SB_DFFESR + 25 SB_DFFSR +
+2 SB_DFFR), 29 CARRY, and 0 BRAM. The route report for each successful run
+also reported 4,197 LCs. The `12` and `50` MHz constraints gave identical
+placement/Fmax per seed; all HX8K seeds met 12 MHz and all failed 50 MHz.
+
+| Device | target | seed 1 | seed 2 | seed 3 | seed 4 | seed 5 | seed 6 | seed 7 | seed 8 | median / min / max / spread MHz |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| HX8K | 12 | 38.46 P | 37.15 P | 38.72 P | 37.42 P | 38.30 P | 36.96 P | 38.37 P | 36.75 P | 37.86 / 36.75 / 38.72 / 1.98 |
+| HX8K | 50 | 38.46 F | 37.15 F | 38.72 F | 37.42 F | 38.30 F | 36.96 F | 38.37 F | 36.75 F | 37.86 / 36.75 / 38.72 / 1.98 |
+| UP5K | 12 | placement F | 15.23 P | placement F | placement F | placement F | placement F | placement F | 15.02 P | 15.12 / 15.02 / 15.23 / 0.21* |
+| UP5K | 50 | placement F | 15.23 F | placement F | placement F | placement F | placement F | placement F | 15.02 F | 15.12 / 15.02 / 15.23 / 0.21* |
+
+`P` means PnR completed and met the requested timing; `F` means it failed
+placement or timing. UP5K's statistics are for its two successful routes only
+and must not be read as a fit verdict: six of eight seeds failed placement.
+All routes use the unmodified default RTL and the same hello image. For each
+device/target, LC / FF / LUT4 / CARRY / BRAM were 4197 / 2032 / 2186 / 29 / 0
+on successful placements. `*` is over the two successful seeds only.
+
+Critical path source was the `dbg_pc[7]` sequential node in every successful
+run. HX8K median-Fmax seed 1 path ended at register-file `dbg_regs[4]` bit 4
+(5.59 ns logic, 19.40 ns routing); worst seed 8 ended at `dbg_regs[2]` bit 4
+(5.77 ns logic, 20.44 ns routing). UP5K median seed 8 ended at
+`dbg_regs[1]` bit 2 (17.35 ns logic, 46.61 ns routing); its worst seed 2
+ended at `dbg_regs[2]` bit 5 (17.40 ns logic, 45.64 ns routing). These paths
+are on the debug-observation FF fanout in this board wrapper and are not a
+hardware timing sign-off.
+
+For UP5K, the exact placement failure for seeds 1/3/4/5/6/7 at both target
+frequencies was, respectively:
+
+```text
+seed 1: ERROR: Unable to find legal placement for cell 'core.ram_i.mem[192]_SB_DFFE_Q_7_DFFLC' of type 'ICESTORM_LC' after 2223941 attempts, check constraints and utilisation. Use `--placer-heap-cell-placement-timeout` to change the number of attempts.
+seed 3: ERROR: Unable to find legal placement for cell 'core.ram_i.mem[129]_SB_DFFE_Q_DFFLC' of type 'ICESTORM_LC' after 2223941 attempts, check constraints and utilisation. Use `--placer-heap-cell-placement-timeout` to change the number of attempts.
+seed 4: ERROR: Unable to find legal placement for cell 'core.flags_cond_i.z_SB_DFFESR_Q_D_SB_LUT4_O_LC' of type 'ICESTORM_LC' after 2223941 attempts, check constraints and utilisation. Use `--placer-heap-cell-placement-timeout` to change the number of attempts.
+seed 5: ERROR: Unable to find legal placement for cell 'core.dbg_pc_SB_DFFESR_Q_4_D_SB_LUT4_O_LC' of type 'ICESTORM_LC' after 2223941 attempts, check constraints and utilisation. Use `--placer-heap-cell-placement-timeout` to change the number of attempts.
+seed 6: ERROR: Unable to find legal placement for cell 'core.flags_cond_i.z_SB_DFFESR_Q_D_SB_LUT4_O_LC' of type 'ICESTORM_LC' after 2223941 attempts, check constraints and utilisation. Use `--placer-heap-cell-placement-timeout` to change the number of attempts.
+seed 7: ERROR: Unable to find legal placement for cell 'uart_tx_SB_LUT4_O_I3_SB_DFFESR_Q_D_SB_LUT4_O_LC' of type 'ICESTORM_LC' after 2223941 attempts, check constraints and utilisation. Use `--placer-heap-cell-placement-timeout` to change the number of attempts.
+```
+
+The successful UP5K routes reported the exact timing failures at 50 MHz:
+
+```text
+seed 2: ERROR: Max frequency for clock 'clk$SB_IO_IN_$glb_clk': 15.23 MHz (FAIL at 50.00 MHz)
+seed 8: ERROR: Max frequency for clock 'clk$SB_IO_IN_$glb_clk': 15.02 MHz (FAIL at 50.00 MHz)
+```
+
+The RAM experiment was run in disposable copies under `/tmp/minicpu8-ramstudy`
+with the hello board wrapper and one PnR seed (HX8K, 12 MHz). The stub returns
+zero and drops writes; the depth variants preserve asynchronous read/write but
+alias addresses modulo 64 or 128, so these are implementation probes, not
+architecturally equivalent CPUs. Exact resources/Fmax:
+
+| RAM variant | LC | FF | LUT4 | CARRY | BRAM | seed-1 Fmax |
+|---|---:|---:|---:|---:|---:|---:|
+| zero/read-only stub | 335 | 112 | 249 | 29 | 0 | 62.70 MHz |
+| async depth 64 | 1,410 | 649 | 807 | 29 | 0 | 44.21 MHz |
+| async depth 128 | 2,427 | 1,136 | 1,312 | 29 | 0 | 45.21 MHz |
+| default async depth 256 (sweep) | 4,197 | 2,032 | 2,186 | 29 | 0 | seed 1: 38.46 MHz |
+
+Relative to the read/write-dropping stub, the default system costs 1,920 FF
+and 3,862 LC; the depth-64 and depth-128 variants cost 537/1,024 additional
+FF and 1,075/2,092 additional LC. The full RAM's visible address range is
+240 bytes (0x00..0xEF); the 16 MMIO addresses do not need storage. This probe
+shows the dominant FF/LC scaling. The stub changes semantics and its improved
+Fmax is not a timing prediction for a useful CPU.
+
+The default UP5K design is marginal and not reliably placeable: only 2/8 seeds
+completed, both below 16 MHz, while the 12 MHz-target runs that did complete
+passed the requested frequency. It is not a robust board-fit result. HX8K
+completed 8/8 at 12 MHz and is the supported default target. The HX8K
+12 MHz-target bitstream built in the seed-1 route; it was 135,100 bytes.
