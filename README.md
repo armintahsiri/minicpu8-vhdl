@@ -165,7 +165,7 @@ gate-level Verilog netlist, simulates it with Icarus Verilog, and compares PC,
 flags, registers, all 256 RAM bytes, cycle count and captured UART bytes with
 the Python golden model for `sum1to10`, `array_sum`, `call_ret` and `hello`.
 
-## Synthesis results (real numbers)
+## Historical Phase 3 synthesis results (not rerun in Phase 4)
 
 Target: iCE40HX8K-CT256, 12 MHz board clock, nextpnr seed 1, `PROGRAM=hello`.
 
