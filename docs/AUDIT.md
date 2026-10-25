@@ -214,3 +214,35 @@ run had no survivors. CI YAML parses, but GitHub Actions has not been run.
 Synthesis rerun and RAM-stub comparison remain blocked by the absent
 GHDL-Yosys plugin and unavailable shell network. Historical phase-3 numbers
 must not be presented as a fresh seed sweep.
+
+## Phase 4B
+
+The required preflight passed on 2026-10-25: the worktree was clean on `main`,
+HEAD was `e9c8cbb` and the `p4-final` tag resolved to that commit, `exp-bram`
+existed, and git identity was Armin Tahsiri <itsarmintahsiri@gmail.com>. A
+create/delete write probe succeeded. The clean baseline run passed `make test`,
+`make test-ghdl`, `make fuzz`, `make iofuzz`, and `make mutation`.
+
+The original `make synth` failure was reproduced verbatim:
+
+```text
+ERROR: Can't load module `./ghdl': dlopen(/opt/homebrew/Cellar/yosys/0.70/bin/../share/yosys/plugins/ghdl.so, 0x0005): tried: '/opt/homebrew/Cellar/yosys/0.70/bin/../share/yosys/plugins/ghdl.so' (no such file), '/System/Volumes/Preboot/Cryptexes/OS/opt/homebrew/Cellar/yosys/0.70/bin/../share/yosys/plugins/ghdl.so' (no such file), '/opt/homebrew/Cellar/yosys/0.70/bin/../share/yosys/plugins/ghdl.so' (no such file)
+```
+
+Evidence: Yosys is at `/opt/homebrew/bin/yosys`; its plugin search directory
+does not contain `ghdl.so`. The usable plugin is
+`/Users/armin/tools/ghdl-yosys-plugin/ghdl.so`. `otool -L` shows it links to
+`@rpath/libghdl-6_0_0.dylib`; `otool -l` showed one obsolete rpath under
+`/tmp/minicpu-tools/...` and one valid `/Users/armin/tools/ghdl/lib` rpath.
+The GHDL shared library exists at `/Users/armin/tools/ghdl/lib/`. The
+Makefile now names the plugin and GHDL prefix explicitly and sets
+`DYLD_FALLBACK_LIBRARY_PATH` on macOS. `make synth-check` then successfully
+synthesized the hello image for HX8K. Yosys reported 2,186 LUT4, 2,112
+SB_DFFE, 40 SB_DFFESR, 25 SB_DFFSR, 2 SB_DFFR, and 29 CARRY. This is a
+synthesis result only, not a placement result.
+
+Tool versions observed: GHDL 6.0.0 LLVM (under `~/tools/ghdl`), NVC 1.23.0,
+Yosys 0.70+post (`0c11ea0`), nextpnr-ice40 with a Homebrew wrapper whose
+`--version` prints no version, and `icepack` installed. `brew info nextpnr`
+reported no formula named `nextpnr`; the PnR banner will be recorded from an
+actual run if available.
