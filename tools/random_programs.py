@@ -247,13 +247,18 @@ def generate_one(index, seed):
 
 
 def generate_io_one(index, seed):
-    """Dedicated I/O-fuzz program: UART polling, a write-while-busy that must
-    be ignored, GPIO_IN -> NOT -> GPIO_OUT, and a cycle-counter read. The
-    valid UART bytes are the first and third .data bytes; the second write is
-    issued immediately and must be dropped by the busy transmitter."""
+    """Generate a varied MMIO program with deterministic random inputs.
+
+    The four rotating shapes cover status polling, back-to-back writes,
+    interleaved peripheral reads and randomized NOP delays. The delay length
+    also varies by index so even a small fixed-seed batch has distinct
+    instruction structure after literal data values are normalized.
+    """
     rng = random.Random((seed * 7919) ^ (index * 104729 + 31))
     b0, b1, b2 = (rng.randint(0, 255) for _ in range(3))
     gpio = (seed + index * 53) & 0xFF
+    pattern = index % 4
+    delay = index // 4
     lines = [
         f"; I/O fuzz program {index} (seed {seed}, gpio_in=0x{gpio:02X})",
         f".data 16, {b0}, {b1}, {b2}",
@@ -264,18 +269,82 @@ def generate_io_one(index, seed):
         "        loadi r4, GPIO_IN",
         "        loadi r5, CYCLE_COUNT_LO",
         "        loadi r6, 16",
+    ]
+
+    for _ in range(delay):
+        lines.append("        nop              ; variable delay")
+
+    lines += [
         "        load r7, [r6+0]",
-        "        store r7, [r2+0]      ; valid first byte",
-        "        load r7, [r6+1]",
-        "        store r7, [r2+0]      ; ignored: transmitter busy",
-        "poll0:  load r7, [r1+0]",
-        "        cmp  r7, r0           ; LOAD does not write flags",
-        "        bnz  poll0",
-        "        load r7, [r6+2]",
-        "        store r7, [r2+0]      ; valid third byte",
-        "poll1:  load r7, [r1+0]",
-        "        cmp  r7, r0",
-        "        bnz  poll1",
+        "        store r7, [r2+0]      ; accepted first byte",
+    ]
+
+    if pattern == 0:
+        # Polling loop with a deliberate busy write that must be discarded.
+        lines += [
+            "        load r7, [r6+1]",
+            "        store r7, [r2+0]      ; back-to-back, dropped",
+            "poll0:  load r7, [r1+0]",
+            "        cmp  r7, r0",
+            "        bnz  poll0",
+            "        load r7, [r6+2]",
+            "        store r7, [r2+0]",
+            "poll1:  load r7, [r1+0]",
+            "        cmp  r7, r0",
+            "        bnz  poll1",
+        ]
+    elif pattern == 1:
+        # Several writes in one busy window; only the first may be captured.
+        lines += [
+            "        load r7, [r6+1]",
+            "        store r7, [r2+0]",
+            "        load r7, [r6+2]",
+            "        store r7, [r2+0]",
+            "poll2:  load r7, [r1+0]",
+            "        cmp  r7, r0",
+            "        bnz  poll2",
+        ]
+    elif pattern == 2:
+        # Exercise GPIO and cycle-counter reads while polling UART status.
+        lines += [
+            "poll3:  load r7, [r1+0]",
+            "        load r6, [r4+0]",
+            "        store r6, [r3+0]",
+            "        load r5, [r5+0]",
+            "        cmp  r7, r0",
+            "        bnz  poll3",
+            "        loadi r6, 18",
+            "        load r7, [r6+0]",
+            "        store r7, [r2+0]",
+            "poll4:  load r7, [r1+0]",
+            "        cmp  r7, r0",
+            "        bnz  poll4",
+        ]
+    else:
+        # Randomized fixed delay, interleaved MMIO, then polling before resend.
+        random_delay = rng.randint(0, 7)
+        for _ in range(random_delay):
+            lines.append("        nop              ; seeded delay")
+        lines += [
+            "        load r7, [r6+1]",
+            "        store r7, [r2+0]      ; may be dropped while busy",
+            "        load r7, [r4+0]",
+            "        not  r7, r7",
+            "        store r7, [r3+0]",
+            "        load r7, [r5+0]",
+            "poll5:  load r7, [r1+0]",
+            "        cmp  r7, r0",
+            "        bnz  poll5",
+            "        loadi r6, 18",
+            "        load r7, [r6+0]",
+            "        store r7, [r2+0]",
+            "poll6:  load r7, [r1+0]",
+            "        cmp  r7, r0",
+            "        bnz  poll6",
+        ]
+
+    # Every program exercises the complete I/O map after its UART pattern.
+    lines += [
         "        load r7, [r4+0]",
         "        not  r7, r7",
         "        store r7, [r3+0]",
@@ -297,7 +366,7 @@ def generate_io_programs(count, seed=20251019):
             raise RuntimeError(f"generated I/O program {p.name} does not "
                                f"assemble: {e}\n{p.asm}")
         required = ("UART_TX", "UART_STATUS", "GPIO_OUT", "GPIO_IN",
-                    "CYCLE_COUNT_LO", "poll0", "poll1")
+                    "CYCLE_COUNT_LO", "poll")
         missing = [x for x in required if x not in p.asm]
         if missing:
             raise RuntimeError("I/O generator missing: " + ", ".join(missing))

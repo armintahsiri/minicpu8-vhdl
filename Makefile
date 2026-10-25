@@ -5,7 +5,7 @@
 #   make fuzz      -- full random differential test (200 programs)
 #   make iofuzz    -- full I/O differential test (40 programs)
 #   make synth     -- Yosys/GHDL synthesis for HX8K (PROGRAM=hello)
-#   make pnr       -- nextpnr place-and-route + bitstream (iCE40HX8K-CT256)
+#   make bitstream -- synthesize, place/route and pack a board image
 #   make post-synth -- simulate the Yosys/iCE40 netlist (Icarus) vs golden model
 #   make waves     -- GHDL VCDs: sum1to10 and hello first UART byte
 #   make clean     -- remove both work libraries and generated files
@@ -22,11 +22,13 @@ STAMPS := $(LIB)/.stamps
 
 # GHDL is a second, independent VHDL-2008 simulator.  Override on machines
 # where the binary is not on PATH: make GHDL=/path/to/ghdl test-ghdl
-GHDL      ?= ghdl
+GHDL      ?= $(shell if command -v ghdl >/dev/null 2>&1; then echo ghdl; elif test -x "$$HOME/tools/ghdl/bin/ghdl"; then echo "$$HOME/tools/ghdl/bin/ghdl"; elif test -x /tmp/ghdl-llvm-6.0.0-macos15-aarch64/bin/ghdl; then echo /tmp/ghdl-llvm-6.0.0-macos15-aarch64/bin/ghdl; else echo ghdl; fi)
 GHDL_DIR  := build/ghdl
 GHDL_LOGS := build/ghdl-logs
 GHDL_FLAGS := --std=08 --workdir=$(GHDL_DIR)
 GHDL_ABS := $(shell command -v $(GHDL) 2>/dev/null || printf '%s' '$(GHDL)')
+TEST_TIMEOUT ?=
+GHDL_RUN_TIMEOUT ?=
 GHDL_SOURCES = $(PKG_UNITS) $(SRC_UNITS) $(GEN_UNITS) $(TB_UNITS)
 
 # ---- FPGA / synthesis flow ------------------------------------------------
@@ -35,9 +37,21 @@ YOSYS     ?= yosys
 GHDL_PLUGIN ?= ghdl
 GHDL_PREFIX ?=
 NEXTPNR   ?= nextpnr-ice40
-DEVICE    ?= hx8k
-PACKAGE   ?= ct256
-PCF       ?= constraints/hx8k_breakout.pcf
+BOARD     ?= hx8k_breakout
+ifeq ($(BOARD),hx8k_breakout)
+BOARD_DEVICE  := hx8k
+BOARD_PACKAGE := ct256
+BOARD_PCF     := constraints/hx8k_breakout.pcf
+else ifeq ($(BOARD),icebreaker)
+BOARD_DEVICE  := up5k
+BOARD_PACKAGE := sg48
+BOARD_PCF     := constraints/icebreaker.pcf
+else
+$(error Unsupported BOARD '$(BOARD)' (use hx8k_breakout or icebreaker))
+endif
+DEVICE    ?= $(BOARD_DEVICE)
+PACKAGE   ?= $(BOARD_PACKAGE)
+PCF       ?= $(BOARD_PCF)
 FREQ      ?= 12
 SEED      ?= 1
 
@@ -62,22 +76,24 @@ TB_UNITS  := uart_rx_model alu_tb register_file_tb flag_reg_tb pc_tb \
              instr_rom_tb data_ram_tb branch_cond_tb alu_compare_tb \
              control_unit_tb uart_tx_tb gpio_tb cycle_counter_tb mmio_tb \
              cpu_tb cpu_edge_tb reset_gating_tb io_cpu_tb \
-             uart_demo_tb hello_tb fibonacci_tb primes_tb gpio_demo_tb
+             uart_demo_tb hello_tb fibonacci_tb primes_tb gpio_demo_tb \
+             uart_real_divisor_tb ram_wrap_tb hw_selftest_tb
 
-PROGS := sum1to10 shift_branch array_sum find_max call_ret \
+PROGS := sum1to10 shift_branch array_sum find_max call_ret ram_wrap \
          unsigned_vs_signed pc_wrap r0_guard \
-         hello fibonacci primes gpio_demo
+         hello fibonacci primes gpio_demo hw_selftest
 GEN_UNITS := $(addsuffix _rom,$(PROGS))
 GEN := $(addsuffix .vhd,$(GEN_UNITS))
 
 RUN := alu_tb register_file_tb flag_reg_tb pc_tb instr_rom_tb data_ram_tb \
        branch_cond_tb alu_compare_tb control_unit_tb uart_tx_tb gpio_tb \
        cycle_counter_tb mmio_tb cpu_tb cpu_edge_tb reset_gating_tb io_cpu_tb \
-       hello_tb fibonacci_tb primes_tb gpio_demo_tb
+       hello_tb fibonacci_tb primes_tb gpio_demo_tb uart_real_divisor_tb \
+       ram_wrap_tb hw_selftest_tb
 
 ALL_STAMPS := $(addprefix $(STAMPS)/,$(addsuffix .stamp,$(PKG_UNITS) $(SRC_UNITS) $(GEN_UNITS) $(TB_UNITS)))
 
-.PHONY: all test test-ghdl asmtest simtest consistency programs quickfuzz fuzz ioquickfuzz iofuzz synth pnr post-synth waves clean FORCE
+.PHONY: all test test-ghdl asmtest simtest consistency diversity mutation programs quickfuzz fuzz ioquickfuzz iofuzz synth pnr bitstream post-synth waves clean FORCE
 
 all: test
 
@@ -90,6 +106,12 @@ simtest:
 
 consistency:
 	python3 tools/check_consistency.py
+
+diversity:
+	python3 tools/test_fuzz_diversity.py
+
+mutation:
+	python3 tools/mutation_check.py
 
 # ---- differential fuzzing -------------------------------------------------
 quickfuzz:
@@ -141,6 +163,7 @@ $(eval $(call vhdl_rule,shift_branch_rom,shift_branch_rom.vhd $(STAMPS)/minicpu_
 $(eval $(call vhdl_rule,array_sum_rom,array_sum_rom.vhd $(STAMPS)/minicpu_pkg.stamp))
 $(eval $(call vhdl_rule,find_max_rom,find_max_rom.vhd $(STAMPS)/minicpu_pkg.stamp))
 $(eval $(call vhdl_rule,call_ret_rom,call_ret_rom.vhd $(STAMPS)/minicpu_pkg.stamp))
+$(eval $(call vhdl_rule,ram_wrap_rom,ram_wrap_rom.vhd $(STAMPS)/minicpu_pkg.stamp))
 $(eval $(call vhdl_rule,unsigned_vs_signed_rom,unsigned_vs_signed_rom.vhd $(STAMPS)/minicpu_pkg.stamp))
 $(eval $(call vhdl_rule,pc_wrap_rom,pc_wrap_rom.vhd $(STAMPS)/minicpu_pkg.stamp))
 $(eval $(call vhdl_rule,r0_guard_rom,r0_guard_rom.vhd $(STAMPS)/minicpu_pkg.stamp))
@@ -148,6 +171,7 @@ $(eval $(call vhdl_rule,hello_rom,hello_rom.vhd $(STAMPS)/minicpu_pkg.stamp))
 $(eval $(call vhdl_rule,fibonacci_rom,fibonacci_rom.vhd $(STAMPS)/minicpu_pkg.stamp))
 $(eval $(call vhdl_rule,primes_rom,primes_rom.vhd $(STAMPS)/minicpu_pkg.stamp))
 $(eval $(call vhdl_rule,gpio_demo_rom,gpio_demo_rom.vhd $(STAMPS)/minicpu_pkg.stamp))
+$(eval $(call vhdl_rule,hw_selftest_rom,hw_selftest_rom.vhd $(STAMPS)/minicpu_pkg.stamp))
 $(eval $(call vhdl_rule,alu_tb,alu_tb.vhd $(STAMPS)/minicpu_pkg.stamp $(STAMPS)/alu.stamp))
 $(eval $(call vhdl_rule,register_file_tb,register_file_tb.vhd $(STAMPS)/minicpu_pkg.stamp $(STAMPS)/register_file.stamp))
 $(eval $(call vhdl_rule,flag_reg_tb,flag_reg_tb.vhd $(STAMPS)/minicpu_pkg.stamp $(STAMPS)/flag_reg.stamp))
@@ -171,12 +195,16 @@ $(eval $(call vhdl_rule,hello_tb,hello_tb.vhd $(STAMPS)/minicpu_pkg.stamp $(STAM
 $(eval $(call vhdl_rule,fibonacci_tb,fibonacci_tb.vhd $(STAMPS)/minicpu_pkg.stamp $(STAMPS)/uart_demo_tb.stamp $(STAMPS)/fibonacci_rom.stamp))
 $(eval $(call vhdl_rule,primes_tb,primes_tb.vhd $(STAMPS)/minicpu_pkg.stamp $(STAMPS)/uart_demo_tb.stamp $(STAMPS)/primes_rom.stamp))
 $(eval $(call vhdl_rule,gpio_demo_tb,gpio_demo_tb.vhd $(STAMPS)/minicpu_pkg.stamp $(STAMPS)/cpu_top.stamp $(STAMPS)/gpio_demo_rom.stamp))
+$(eval $(call vhdl_rule,uart_real_divisor_tb,uart_real_divisor_tb.vhd $(STAMPS)/minicpu_pkg.stamp $(STAMPS)/mmio.stamp $(STAMPS)/uart_rx_model.stamp))
+$(eval $(call vhdl_rule,ram_wrap_tb,ram_wrap_tb.vhd $(STAMPS)/minicpu_pkg.stamp $(STAMPS)/cpu_top.stamp $(STAMPS)/ram_wrap_rom.stamp))
+$(eval $(call vhdl_rule,hw_selftest_tb,hw_selftest_tb.vhd $(STAMPS)/minicpu_pkg.stamp $(STAMPS)/cpu_top.stamp $(STAMPS)/hw_selftest_rom.stamp $(STAMPS)/uart_rx_model.stamp))
 
 # ---- run everything ------------------------------------------------------
-test: asmtest simtest consistency programs $(ALL_STAMPS)
+test: asmtest simtest consistency diversity programs $(ALL_STAMPS)
 	@set -e; for tb in $(RUN); do \
-	  echo "=== run $$tb ==="; \
-	  $(NVC) $(STD) $(WORK) -e $$tb -r; \
+	  echo "=== START $$tb ==="; \
+	  $(TEST_TIMEOUT) $(NVC) $(STD) $(WORK) -e $$tb -r; \
+	  echo "=== PASS $$tb ==="; \
 	done
 	@echo "=== quick differential fuzz (20 ALU/RAM programs) ==="
 	@python3 tools/fuzz.py --count 20 --seed 20251019 --dir build/fuzz_quick
@@ -198,14 +226,15 @@ test-ghdl: programs
 	  $(GHDL) -a $(GHDL_FLAGS) $$u.vhd; \
 	done
 	@set -e; for tb in $(RUN); do \
-	  echo "=== ghdl run $$tb ==="; \
-	  ( cd $(GHDL_DIR) && $(GHDL_ABS) --elab-run --std=08 --workdir=. $$tb \
+	  echo "=== START GHDL $$tb ==="; \
+	  ( cd $(GHDL_DIR) && $(GHDL_RUN_TIMEOUT) $(GHDL_ABS) --elab-run --std=08 --workdir=. $$tb \
 	      --assert-level=error ) > $(GHDL_LOGS)/$$tb.log 2>&1 || { \
 	    echo "GHDL FAILED: $$tb"; cat $(GHDL_LOGS)/$$tb.log; exit 1; }; \
 	  grep -q "ALL TESTS PASSED" $(GHDL_LOGS)/$$tb.log || { \
 	    echo "GHDL: $$tb did not print its PASSED banner"; \
 	    cat $(GHDL_LOGS)/$$tb.log; exit 1; }; \
 	  grep -E "checks," $(GHDL_LOGS)/$$tb.log | tail -1 || true; \
+	  echo "=== PASS GHDL $$tb ==="; \
 	done
 	@echo "==================================================="
 	@echo "ALL GHDL TESTBENCHES PASSED"
@@ -262,6 +291,8 @@ pnr: synth
 	  --report $(FPGA_BUILD)/nextpnr-report.json 2>&1 | tee $(PNR_LOG)
 	icepack $(PNR_ASC) $(PNR_BIN)
 	@echo "PNR + BITSTREAM OK: $(PNR_BIN)"
+
+bitstream: pnr
 
 FORCE:
 

@@ -98,6 +98,13 @@ pkg_text = read("minicpu_pkg.vhd")
 doc_text = read("docs/ISA.md")
 cpu_text = read("cpu_top.vhd")
 asm_text = read("tools/assembler.py")
+flag_text = read("flag_reg.vhd")
+alu_text = read("alu.vhd")
+ram_text = read("data_ram.vhd")
+uart_text = read("uart_tx.vhd")
+gpio_text = read("gpio.vhd")
+counter_text = read("cycle_counter.vhd")
+mmio_text = read("mmio.vhd")
 
 consts = parse_constants(pkg_text)
 doc_opcode_sec = section(doc_text, "## 2. Opcode map", "Pseudo-instructions")
@@ -275,6 +282,49 @@ ok("cpu_top exposes uart_tx/gpio ports",
    "uart_tx:outstd_logic" in cpu_io_norm and
    "gpio_out:outbyte_t" in cpu_io_norm and
    "gpio_in:inbyte_t" in cpu_io_norm)
+
+# ---- behavior statements that used to be documentation-only checks -------
+doc_norm = normalize(doc_text)
+flag_norm = normalize(flag_text)
+alu_norm = normalize(alu_text)
+ram_norm = normalize(ram_text)
+uart_norm = normalize(uart_text)
+gpio_norm = normalize(gpio_text)
+counter_norm = normalize(counter_text)
+mmio_norm = normalize(mmio_text)
+ok("ISA documents reset flags as zero",
+   "resetto`0000`" in doc_norm and
+   "writtenonlywhenaninstructionhas`flagwrite=1`" in doc_norm)
+ok("flag register reset clears all flags",
+   "ifrst='1'thenq<=(others=>'0')" in flag_norm)
+ok("ISA SUB/CMP carry means no borrow",
+   "c=1meansnoborrow" in doc_norm)
+ok("ALU subtraction complements operand and adds carry-in",
+   "sum:=('0'&ua)+('0'&(notub))+1" in alu_norm)
+ok("golden model SUB carry uses unsigned comparison",
+   "cf=1ifa>=belse0" in normalize(read("tools/isa_sim.py")))
+ok("ISA RAM read is asynchronous and write synchronous",
+   "asynchronous(combinational)fromtheaddressedbyte" in doc_norm and
+   "synchronousontherisingclockedge" in doc_norm)
+ok("RTL RAM read is combinational and write is edge-triggered",
+   "process(all)" in ram_norm and "ifrising_edge(clk)thenifwe='1'then" in ram_norm)
+ok("ISA states GPIO input settles after two rising edges",
+   "aftertworisingclockedges" in doc_norm)
+ok("GPIO RTL uses consecutive meta/sync flops",
+   "meta<=pin_in;sync<=meta;" in gpio_norm)
+ok("cycle counter is an 8-bit modulo counter",
+   "signalcnt:unsigned(7downto0)" in counter_norm and
+   "cnt<=cnt+1" in counter_norm and "wraps0xff->0x00naturally" in counter_norm)
+ok("UART divider is integer CLK_FREQ divided by BAUD",
+   "constantclks_per_bit:positive:=clk_freq/baud" in uart_norm and
+   "clk_freq/clks_per_bit" in doc_norm)
+ok("MMIO accepts UART write only while transmitter is idle",
+   "we='1'andaddr=io_uart_txanduart_busy='0'" in mmio_norm and
+   "awritewhile`uart_status.tx_busy=1`is**ignored**" in doc_norm)
+ok("CPU reset gates register, RAM and flag writes",
+   "rf_we<=reg_writeandnotrst" in cpu_io_norm and
+   "ram_we<=mem_writeandnotrst" in cpu_io_norm and
+   "flag_en<=flag_writeandnotrst" in cpu_io_norm)
 
 print()
 if failures:

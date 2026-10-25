@@ -1,8 +1,7 @@
 -- fpga_top.vhd : synthesizable board wrapper for MiniCPU-8
--- Target: Lattice iCE40-HX8K Breakout Board (iCE40HX8K-CT256, 12 MHz).
--- Pin directions and board mapping are in constraints/hx8k_breakout.pcf. The program image is selected at
--- build time through the generated work.fpga_program package (make
--- PROGRAM=hello synth); no run-time ROM loading is used.
+-- Target board is selected in constraints/<BOARD>.pcf; make bitstream supports
+-- hx8k_breakout (default) and icebreaker. The program image is selected at
+-- build time through work.fpga_program; no run-time ROM loading is used.
 --
 -- Reset: the user button is active-low. It asynchronously asserts a two-flop
 -- reset synchronizer; release is synchronous, so the CPU sees a clean

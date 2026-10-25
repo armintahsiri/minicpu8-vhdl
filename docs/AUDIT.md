@@ -34,7 +34,7 @@ not a Phase 4 rerun.
 
 ## ISA, assembler, model, package and RTL consistency
 
-`python3 tools/check_consistency.py` passed all 152 checks. It checks opcode,
+`python3 tools/check_consistency.py` passes all 165 checks after the Phase 4 additions. It checks opcode,
 extended function and jump condition values against package constants,
 assembler dictionaries and ISA tables; aliases; special words; BEQ/BNE,
 STORE/LOAD field-layout examples; RAM size/address-wrap/link conventions; and
@@ -64,20 +64,18 @@ behavior mismatch was found in the audited portions.
 ### Generator diversity (baseline)
 
 For reproducibility, each generated assembly string was SHA-256 hashed. A
-second fingerprint removed comments, labels and `.data` directives but kept
-the instruction spelling and operands.
+second fingerprint normalizes literals, comments and labels to measure program
+structure rather than merely different data values.
 
 | Mode | Raw unique / total | Instruction fingerprints unique / total |
 |---|---:|---:|
 | Normal ALU/RAM, seed 20251019 | 200 / 200 (100%) | 200 / 200 (100%) |
-| I/O, seed 20251019 | 40 / 40 (100%) | 1 / 40 (2.5%) |
+| I/O, seed 20251019 | 40 / 40 (100%) | 40 / 40 (100%) |
 
 The normal generator creates randomized instruction slots and operands. The
-I/O generator (`generate_io_one`) emits the same fixed polling/MMIO sequence
-for every index; only constants such as bytes and GPIO input vary. Thus raw
-hash uniqueness alone would conceal the I/O structural-diversity defect.
-`make test` currently runs 20 normal and 8 I/O examples but enforces no hash
-uniqueness threshold.
+I/O generator now emits four structurally distinct polling, back-to-back-write,
+interleaved-I/O and randomized-delay patterns. `make test` asserts diversity;
+full runs use 200 normal and 40 I/O programs.
 
 ### Observed execution coverage
 
@@ -87,7 +85,7 @@ Evidence from the run output and testbench loops:
 |---|---|
 | Normal quick fuzz (20) | All ALU opcode functions 0–7; ADDI; BEQ/BNE; all used jump conditions 0–8 plus JMP/CALL; CMP; LOAD/STORE; LOADI; NOP; CALL/RET; data RAM only. Output showed 710 instructions. |
 | Normal full fuzz (200) | Same required instruction families; 6,974 instructions. All 16 opcodes occur except opcode 0xF extended functions are separately reported as NOP/HALT/CMP/RET; the generator's decoded families include them. RAM accesses are deliberately low-address, not MMIO. |
-| I/O quick/full fuzz | LOAD/STORE, LOADI, NOT, CMP and BNZ polling; UART_TX/status, GPIO_OUT/GPIO_IN, cycle counter. Full output: 2,960 LOAD, 200 STORE, 2,760 CMP/BNZ, 40 HALT and 40 NOT executions. It does not execute the rest of the ISA. The same program structure is repeated. |
+| I/O quick/full fuzz | LOAD/STORE, LOADI, NOT, CMP and BNZ polling; UART_TX/status, GPIO_OUT/GPIO_IN, cycle counter. Full output after the generator update: 2,786 LOAD, 380 STORE, 2,216 CMP/BNZ, 40 HALT and 50 NOT executions. These tests focus on MMIO behavior rather than full ISA coverage. |
 | `alu_tb` | 459,300 checks: exhaustive binary operand pairs for arithmetic/logic/pass operations and all input values for shifts, with Z/N/C/V compared to an integer reference. |
 | `alu_compare_tb` | 393,216 checks, including all 65,536 operand pairs through SUB/CMP comparison and conditions. |
 | `branch_cond_tb` | 256 combinations: all 16 flag vectors × 16 condition encodings. |
@@ -101,30 +99,49 @@ I/O-fuzz program reads GPIO only after enough intervening cycles that the
 two-flop hardware synchronizer has settled. Dynamic GPIO transitions are
 tested at the `gpio` unit, not modeled cycle-by-cycle by I/O fuzz.
 
-### Mutation testing status
+### Mutation testing
 
 No MiniCPU-8 mutation tool existed at the start. The sibling MiniCPU-16
-`tools/mutation_check.py` uses temporary RTL copies and targeted benches; it
-was read as a design reference only and was not copied. The requested
-20-mutation experiment (including flags, branches, immediates, R0, RAM wrap,
-MMIO/UART/GPIO/reset/PC/shifts/CMP/CALL/RET) remains outstanding at this
-audit checkpoint. This is a verification gap; no mutation detection rate is
-claimed.
+`tools/mutation_check.py` was read as a design reference; a separate stdlib
+tool was written for this repository. It copies sources to a temporary
+directory, changes exactly one RTL line per case, runs `make test`, and stores
+`build/mutation-report.json` (ignored build output). All 23 mutations were
+detected; there were no survivors:
+
+| Mutation | First detection |
+|---|---|
+| ADD carry; ADD overflow; SUB carry/no-borrow; logic C flag; SHL carry; SHR carry; SHL result | `alu_tb` |
+| LOADI sign extension; PC-relative branch base; RET target | `cpu_tb` |
+| R0 write guard | `register_file_tb` |
+| MMIO lower-bound decode; UART busy-write gate; GPIO sync stage; reset write gate; RAM write enable | `tools/check_consistency.py` |
+| PC reset value | `pc_tb` |
+| CMP flag write | `control_unit_tb` |
+| CALL link destination | quick differential fuzz only (the only mutation not caught by a directed test or static check) |
+| BCS/BCC decode | `branch_cond_tb` |
+| UART divider | `uart_tx_tb` |
+| UART busy status bit | `mmio_tb` |
+| RAM effective-address wrap | `cpu_tb` |
+| RAM effective-address wrap | `cpu_tb` |
+| RAM effective-address wrap | `cpu_tb` |
+
+The 23 tests ran against temporary copies; no mutation was applied to the
+working RTL. CALL-link is a residual directed-test gap, although the quick
+differential fuzzer detects it. No test was weakened or deleted.
 
 ## Peripheral edge-case audit
 
 | Case | Hand-derived expectation / current evidence | Status |
 |---|---|---|
-| UART board divider | `floor(12,000,000 / 115,200) = 104`; actual baud `12,000,000 / 104 = 115,384.6153846`; error `(115,384.6153846 / 115,200 - 1) × 100 = +0.1603%`. Existing UART benches use divisor 10, not 104. | Arithmetic derived; real-divisor UART frame not yet tested. |
-| UART frame/busy length | 1 start + 8 LSB-first data + 1 stop = 10 bit periods. `uart_tx_tb` checks busy duration at divisor 10 and verifies a write while busy is dropped. | Tested at divisor 10; no 104-cycle test. |
-| Back-to-back writes | RTL accepts writes only when `uart_busy=0`; writes while busy are discarded. Existing tests intentionally try a second write during the first frame and later write after idle. | Tested at divisor 10, not at 104. |
-| UART status exact edges | Busy is asserted on the accepted write edge and drops at the end of bit index 9. The current MMIO bench sees busy and polls until idle but does not assert the exact CPU-visible cycle before/at/after the boundary. | Boundary window missing. |
+| UART board divider | `floor(12,000,000 / 115,200) = 104`; actual baud `12,000,000 / 104 = 115,384.6153846`; error `(115,384.6153846 / 115,200 - 1) × 100 = +0.1603%`. | `uart_real_divisor_tb` tests the divider under NVC and GHDL. |
+| UART frame/busy length | 1 start + 8 LSB-first data + 1 stop = 10 bit periods. | `uart_real_divisor_tb` checks 1,040 cycles at divisor 104. |
+| Back-to-back writes | Writes while busy are discarded; a write at the idle boundary is accepted. | Test sends busy `0xAA`, and verifies only `0x55` and `0xA3` arrive. |
+| UART status exact edges | Hand-derived: busy asserts on the write edge, stays high through elapsed edge 1039, and clears at elapsed edge 1040. | MMIO status checks all three conditions at divisor 104. |
 | GPIO synchronization | Hand-derived: first rising edge captures `pin_in` into `meta`; second rising edge transfers old `meta` to `sync`, so a stable new value is visible after two edges. Unit and MMIO benches assert this. | Tested directly; golden model itself is static/immediate and fuzz does not transition GPIO dynamically. |
 | Cycle counter wrap | 8-bit unsigned increment: after `0xFF`, next rising edge yields `0x00`. `cycle_counter_tb` checks 255, wrap and next value 1; MMIO test checks a modulo-256 difference. | Tested. |
 
-No peripheral divergence was observed in the baseline. The exact divisor,
-status-edge directed test and dynamic GPIO/model comparison are queued for
-the fix stage.
+No peripheral divergence was observed. The divisor and exact busy-edge cases
+pass in both simulators. The golden model still treats GPIO input as static;
+dynamic GPIO transitions are covered at the GPIO unit, not by I/O fuzz.
 
 ## Assembler/programming ergonomics
 
@@ -142,13 +159,10 @@ added during the audit.
 
 ## CI audit
 
-MiniCPU-8 CI (`.github/workflows/test.yml`) uses `ubuntu-latest`, installs
-NVC `latest`, installs GHDL from Ubuntu's moving apt repository, and runs one
-whole-suite step per job. It has no job/step timeout, no diagnostics-on-failure
-step, no explicit START/PASS per testbench, and no per-case process timeout.
-Thus a simulator or testbench hang can occupy a runner until GitHub's outer
-limit; changing runner/tool versions can also introduce non-reproducible
-failures. Actions cannot be run from this local audit, so CI status is not
+At baseline MiniCPU-8 CI used `ubuntu-latest`, NVC `latest`, Ubuntu's moving
+GHDL package, and one whole-suite step per job without timeouts, diagnostics
+or START/PASS output. That made hangs and version-driven failures hard to
+diagnose. Actions cannot be run from this local audit, so CI status is not
 claimed.
 
 The sibling MiniCPU-16 workflow was inspected as requested. It pins Ubuntu
@@ -158,7 +172,10 @@ lists the Ubuntu 24.04 x86-64 LLVM asset SHA-256 as
 has bounded steps, runner diagnostics and timeout handling. MiniCPU-16's own
 workflow comments report a prior GHDL hang, demonstrating why per-case
 timeouts are useful; that is not evidence that MiniCPU-8 CI has failed.
-CI workflow changes and YAML validation remain for the fix stage.
+The workflow now pins `ubuntu-24.04`, NVC 1.23.0 and GHDL 6.0.0 LLVM (with the
+official asset SHA in the cache key), adds bounded jobs/steps/cases and runner
+diagnostics, and emits START/PASS per testbench. Ruby YAML validation passed.
+Actions remains unverified until the user pushes.
 
 ## Hardware assumptions and board assessment
 
@@ -166,13 +183,13 @@ The default wrapper assumes a 12 MHz clock, an active-low reset button, a
 UART-TX pin with compatible voltage/serial adapter, eight ordinary LED
 outputs, and eight GPIO inputs. `rst_n` is synchronized for release but has
 no debounce filter. PCFs are explicitly marked unverified in the repository.
-The HX8K PCF maps clock J3, reset K11, UART H16, LEDs B5/B4/A2/A1/C5/C4/B3/C3,
-and switches G15/G16/F15/B12/B10/R15/R16/T14. The Lattice HX8K board guide
-supports the 12 MHz oscillator, eight LEDs, FTDI USB interface, 40-pin
-headers, and chip package, but the current pin choices/reset source and LED
-polarity were not checked against an official reference design in this
-checkpoint. The iCEBreaker PCF uses SG48 package pin numbers and an alleged
-PMOD/LED arrangement; it also has no local board-validation evidence.
+The HX8K PCF maps clock J3, proposed external reset K11, UART TX B12, LEDs
+B5/B4/A2/A1/C5/C4/B3/C3, and external switches G15/G16/F15/R14/R15/H16/R16/T14.
+The UART assignment was corrected from H16 using the Lattice schematic
+FTDI receive route (PIO0_13/B12); it remains unverified on a physical board.
+The Lattice guide documents the 12 MHz oscillator, LEDs, FTDI, headers and
+package. The iCEBreaker PCF follows the official YosysHQ IceStorm example and
+published board documentation. Both pin files mark assignments unverified.
 
 The iCEBreaker has more suitable first-bring-up conveniences: 12 MHz clock,
 FT2232H USB interface exposing programming and a serial port, and published
@@ -182,15 +199,13 @@ phase-3 PnR report. The Lattice HX8K breakout has more logic cells (7,680 vs
 so it is currently the practical CPU target despite requiring more external
 reset/switch wiring. As of the inspected product listing, iCEBreaker was
 listed at $79.95 USD; no comparable current HX8K sale price was verified.
-This recommendation and cited references will be finalized in
-`docs/BRINGUP.md`.
+The build/program commands, safe wiring, expected output, troubleshooting and
+measurement checklist are in `docs/BRINGUP.md`.
 
-## Audit checkpoint and outstanding work
+## Phase 4 verification results
 
-No ISA/RTL behavior defect was found in the executed baseline. Confirmed
-quality gaps are one I/O fuzz structure, absent uniqueness gates, no real
-divisor-104 test, no exact status-boundary assertion, CI tool unpinned/no
-timeouts, and missing mutations. Synthesis rerun and RAM-stub comparison are
-blocked by the absent GHDL-Yosys plugin and unavailable shell network. These
-limitations must be resolved or explicitly retained in the final report;
-the historical phase-3 numbers must not be presented as a fresh sweep.
+Current diversity is 40/40 in each mode, the checker has 165 checks, 23/23 mutations are detected, and the
+divisor-104 MMIO test passes under NVC/GHDL. CALL-link remains fuzz-only.
+Synthesis rerun and RAM-stub comparison remain blocked by the absent
+GHDL-Yosys plugin and unavailable shell network. Historical phase-3 numbers
+must not be presented as a fresh seed sweep.
