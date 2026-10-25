@@ -4,7 +4,8 @@
 An educational 8-bit **single-cycle CPU** written in VHDL-2008. It includes
 memory-mapped UART and GPIO, two-simulator verification, differential fuzzing,
 mutation checks, FPGA constraints and a hardware bring-up plan. The RTL and
-programs are simulation-verified; Phase 4 has not been run on a physical FPGA.
+programs are simulation-verified; no bitstream has been programmed on a
+physical FPGA.
 
 The ISA itself is unchanged from Phase 2. `docs/ISA.md` is the normative
 specification and is mechanically cross-checked against the hardware,
@@ -214,18 +215,20 @@ Recreate the source VCDs with `make waves`. The SVGs can be regenerated with
 
 ## Phase 4 audit and hardware status
 
-`docs/AUDIT.md` records the verification audit, coverage limits, 23/23
-detected RTL mutations, and synthesis environment blocker. The full NVC and
-GHDL suites pass, as do the 200-program ALU/RAM and 40-program I/O differential
-fuzz runs. The fresh synthesis seed sweep could not run because
-`ghdl-yosys-plugin` is not installed in the audit environment; the Phase 3
-resource/timing figures above are historical measurements, not a fresh Phase
-4 result. No bitstream has been programmed on a physical board.
+`docs/AUDIT.md` records the verification audit, synthesis-flow repair, fresh
+seed sweeps, RAM resource study, and coverage limits. The default design routed
+on HX8K for all 8 seeds at 12 MHz, with median routed Fmax 37.86 MHz. The UP5K
+default design routed on only 2/8 seeds. An isolated `exp-bram` branch
+experiment inferred one UP5K block RAM and routed on all 8 seeds, with a
+one-cycle LOAD stall. No bitstream has been programmed on physical hardware.
 
 See [`docs/BRINGUP.md`](docs/BRINGUP.md) for board selection, build/program
 commands, safe wiring, expected demo output and the hardware measurement log.
-The HX8K is the recommended first target; all PCF assignments remain marked
-unverified until tested on the exact board revision.
+The HX8K with the default design is the recommended first target. The
+`exp-bram` experiment is documented in [`docs/BRAM_EXPERIMENT.md`](docs/BRAM_EXPERIMENT.md)
+and has not been merged into `main`. All PCF assignments remain unverified
+until tested on the exact board revision. The integer UART divider at nominal
+12 MHz yields 115,384.615 baud, +0.1603% relative to 115200 baud.
 
 ## Files
 

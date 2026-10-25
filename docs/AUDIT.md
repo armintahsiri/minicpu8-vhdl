@@ -328,4 +328,14 @@ The default UP5K design is marginal and not reliably placeable: only 2/8 seeds
 completed, both below 16 MHz, while the 12 MHz-target runs that did complete
 passed the requested frequency. It is not a robust board-fit result. HX8K
 completed 8/8 at 12 MHz and is the supported default target. The HX8K
-12 MHz-target bitstream built in the seed-1 route; it was 135,100 bytes.
+12 MHz-target bitstream built in the seed-1 route; it was 135,100 bytes. After
+the branch experiment was complete, the recommended default image was rebuilt
+on `main` with `make PROGRAM=hello BOARD=hx8k_breakout FREQ=12 SEED=1
+bitstream`; it completed synthesis, routing and `icepack`, with final routed
+Fmax 38.46 MHz (PASS at 12 MHz) and the same 135,100-byte binary. This is still
+an unprogrammed bitstream; no physical-board behavior was measured.
+
+The first bring-up recommendation is therefore the default design on HX8K.
+The `exp-bram` UP5K result is a useful next hardware experiment if a board is
+available, but it adds one cycle to each LOAD and changes the instant at which
+MMIO reads sample counters and UART status. It remains isolated from `main`.
