@@ -2,31 +2,102 @@ name: test
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 jobs:
   nvc:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: nickg/setup-nvc@v1
-        with:
-          version: latest
-      - uses: actions/setup-python@v5
+      - name: Checkout
+        uses: actions/checkout@v4
+        timeout-minutes: 5
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        timeout-minutes: 5
         with:
           python-version: "3.12"
-      - name: Full test suite (includes quick fuzz)
-        run: make test
-  ghdl:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+
+      - name: Install NVC 1.23.0
+        uses: nickg/setup-nvc@v1
+        timeout-minutes: 10
         with:
-          python-version: "3.12"
-      - name: Install GHDL (VHDL-2008)
+          version: "1.23.0"
+
+      - name: Runner diagnostics
+        if: always()
+        timeout-minutes: 2
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ghdl
-          ghdl --version
-      - name: All testbenches under GHDL
-        run: make test-ghdl
+          nvc --version || true
+          python3 --version || true
+          make --version || true
+          nproc || true
+          free -m || true
+
+      - name: NVC suite (START/PASS per testbench; 45s case timeout)
+        timeout-minutes: 5
+        env:
+          TEST_TIMEOUT: "timeout 45"
+        run: timeout 240 make test
+
+  ghdl:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        timeout-minutes: 5
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        timeout-minutes: 5
+        with:
+          python-version: "3.12"
+
+      - name: Cache official GHDL 6.0.0 LLVM asset (Ubuntu 24.04 x86-64)
+        id: ghdl-cache
+        uses: actions/cache@v4
+        timeout-minutes: 3
+        with:
+          path: .cache/ghdl-6.0.0-llvm
+          key: ubuntu-24.04-ghdl-6.0.0-llvm-e0064cd3d1569e7fca27b186b0d71e80c087de90db4e466ed77dc669a574d8bc
+
+      - name: Install pinned GHDL release (cache miss)
+        if: steps.ghdl-cache.outputs.cache-hit != 'true'
+        uses: ghdl/setup-ghdl@v1
+        timeout-minutes: 15
+        with:
+          version: "6.0.0"
+          backend: llvm
+          install-directory: .cache/ghdl-6.0.0-llvm
+
+      - name: Install cached GHDL runtime dependencies
+        if: steps.ghdl-cache.outputs.cache-hit == 'true'
+        timeout-minutes: 10
+        run: >-
+          sudo xargs --no-run-if-empty
+          -a .cache/ghdl-6.0.0-llvm/ubuntu.requirements --
+          apt-get install -y --no-install-recommends
+
+      - name: Add GHDL to PATH
+        timeout-minutes: 2
+        run: |
+          echo "$GITHUB_WORKSPACE/.cache/ghdl-6.0.0-llvm/bin" >> "$GITHUB_PATH"
+          echo "GHDL_PREFIX=$GITHUB_WORKSPACE/.cache/ghdl-6.0.0-llvm/lib/ghdl" >> "$GITHUB_ENV"
+
+      - name: Runner diagnostics
+        if: always()
+        timeout-minutes: 2
+        run: |
+          ghdl --version || true
+          python3 --version || true
+          make --version || true
+          nproc || true
+          free -m || true
+
+      - name: GHDL testbenches (START/PASS per case; 45s timeout)
+        timeout-minutes: 5
+        env:
+          GHDL_RUN_TIMEOUT: "timeout 45"
+        run: timeout 240 make test-ghdl
