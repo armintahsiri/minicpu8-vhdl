@@ -34,8 +34,8 @@ GHDL_SOURCES = $(PKG_UNITS) $(SRC_UNITS) $(GEN_UNITS) $(TB_UNITS)
 # ---- FPGA / synthesis flow ------------------------------------------------
 PROGRAM   ?= hello
 YOSYS     ?= yosys
-GHDL_PLUGIN ?= ghdl
-GHDL_PREFIX ?=
+GHDL_PLUGIN ?= $(HOME)/tools/ghdl-yosys-plugin/ghdl.so
+GHDL_PREFIX ?= $(HOME)/tools/ghdl/lib/ghdl
 NEXTPNR   ?= nextpnr-ice40
 BOARD     ?= hx8k_breakout
 ifeq ($(BOARD),hx8k_breakout)
@@ -68,6 +68,9 @@ FPGA_VHDL   = $(PKG_UNITS:%=%.vhd) $(SRC_UNITS:%=%.vhd) \
 ifneq ($(GHDL_PREFIX),)
 export GHDL_PREFIX
 endif
+ifeq ($(shell uname -s),Darwin)
+export DYLD_FALLBACK_LIBRARY_PATH := $(HOME)/tools/ghdl/lib$(if $(DYLD_FALLBACK_LIBRARY_PATH),:$(DYLD_FALLBACK_LIBRARY_PATH))
+endif
 
 PKG_UNITS := minicpu_pkg
 SRC_UNITS := alu register_file flag_reg pc instr_rom data_ram branch_cond \
@@ -93,7 +96,7 @@ RUN := alu_tb register_file_tb flag_reg_tb pc_tb instr_rom_tb data_ram_tb \
 
 ALL_STAMPS := $(addprefix $(STAMPS)/,$(addsuffix .stamp,$(PKG_UNITS) $(SRC_UNITS) $(GEN_UNITS) $(TB_UNITS)))
 
-.PHONY: all test test-ghdl asmtest simtest consistency diversity mutation programs quickfuzz fuzz ioquickfuzz iofuzz synth pnr bitstream post-synth waves clean FORCE
+.PHONY: all test test-ghdl asmtest simtest consistency diversity mutation programs quickfuzz fuzz ioquickfuzz iofuzz synth synth-check pnr bitstream post-synth waves clean FORCE
 
 all: test
 
@@ -259,11 +262,18 @@ $(FPGA_PKG): programs/$(PROGRAM).asm tools/assembler.py FORCE
 
 synth: $(PROGRAM)_rom.vhd $(FPGA_PKG)
 	@mkdir -p $(FPGA_BUILD)
+	@test -x "$(GHDL)" || { echo "ERROR: GHDL executable missing: $(GHDL)"; exit 1; }
+	@test -f "$(GHDL_PLUGIN)" || { echo "ERROR: GHDL Yosys plugin missing: $(GHDL_PLUGIN) (set GHDL_PLUGIN=...; expected default $(HOME)/tools/ghdl-yosys-plugin/ghdl.so)"; exit 1; }
+	@test -d "$(GHDL_PREFIX)" || { echo "ERROR: GHDL_PREFIX directory missing: $(GHDL_PREFIX)"; exit 1; }
 	@set -o pipefail; \
-	$(YOSYS) -m $(GHDL_PLUGIN) -p \
+	$(YOSYS) -m "$(GHDL_PLUGIN)" -p \
 	  'ghdl --std=08 $(FPGA_VHDL) -e fpga_top; synth_ice40 -top fpga_top -json $(SYNTH_JSON)' \
-	  2>&1 | tee $(SYNTH_LOG)
+	  2>&1 | tee $(SYNTH_LOG) || { \
+	    echo "ERROR: synthesis failed. Checked GHDL=$(GHDL) GHDL_PLUGIN=$(GHDL_PLUGIN) GHDL_PREFIX=$(GHDL_PREFIX) DYLD_FALLBACK_LIBRARY_PATH=$$DYLD_FALLBACK_LIBRARY_PATH YOSYS=$(YOSYS). See $(SYNTH_LOG)."; exit 1; }
 	@echo "SYNTHESIS OK: $(SYNTH_JSON)"
+
+synth-check:
+	@$(MAKE) --no-print-directory PROGRAM=hello BOARD=hx8k_breakout DEVICE=hx8k PACKAGE=ct256 synth
 
 post-synth:
 	python3 tools/post_synth.py --programs sum1to10,array_sum,call_ret,hello
