@@ -1,65 +1,72 @@
 # EXPERIMENT: synchronous data RAM / iCE40 BRAM
 
-Branch: `exp-bram`. This note is deliberately kept off `main`; no default RTL,
-ISA behavior, programs or cycle counts were changed for this experiment.
+Branch: `exp-bram`. This document and all implementation work here are
+experimental and must remain off `main` unless separately reviewed.
 
-## Question and current verdict
+## Question and baseline evidence
 
 Can the 256 x 8 data store use iCE40 block RAM and reduce logic enough to fit
-UP5K? This experiment is **blocked before synthesis** in the current
-environment, so there is no evidence yet that either implementation maps or
-fits. `make PROGRAM=hello synth` fails before reading the design because Yosys
-0.70 cannot load `ghdl.so` from its configured plugin directory. The plugin is
-not installed at the expected path, and network DNS was unavailable during
-the audit. Therefore this branch contains an experiment plan and a precise
-timing contract, not an unverified RTL implementation.
+UP5K? The baseline asynchronous design synthesizes. Fresh async-read mapping,
+seed sweep and disposable RAM-size measurements are recorded in
+`docs/AUDIT.md`. GHDL identifies a 256 x 8 RAM, but Yosys maps it to FFs and
+LUTs; this flow reports zero `SB_RAM40_4K` and zero `ICESTORM_SPRAM`. It does
+not provide a usable async-read distributed RAM mapping for this RTL.
 
-## A. Asynchronous read / distributed-memory attempt
+## A. Asynchronous read / distributed memory
 
-The baseline `data_ram` has asynchronous read and synchronous write. First
-restore the matching `ghdl-yosys-plugin`, then synthesize the unmodified design
-and a temporary version with the same 256 x 8 storage replaced by a constant
-read stub. Compare FF and LC counts to isolate the storage cost. Inspect the
-Yosys iCE40 mapping to determine whether any LUT/distributed-memory resource
-is inferred; do not assume iCE40 supports a suitable distributed RAM mapping.
-Run HX8K/UP5K PnR before making a fit claim.
+The baseline `data_ram` has asynchronous read and synchronous write. Inspect
+the Yosys iCE40 mapping and distinguish inference from actual resource use.
+The disposable stub/depth comparison in `docs/AUDIT.md` measures scaling. It
+is an implementation probe, not an architecturally equivalent CPU.
 
-The audit's previous phase-3 report says the asynchronous RAM used about 2,000
-flip-flops and that UP5K placement failed. Those are historical values, not
-measurements from this branch or a fresh stub comparison.
-
-## B. Synchronous BRAM with a stalled LOAD
+## B. Synchronous BRAM with LOAD stall
 
 Keep the default `LOAD_STALL=false` configuration bit-identical. In the
-experimental configuration, define LOAD retirement as two clock intervals:
+experimental configuration, every LOAD, including MMIO reads, retires in two
+clock intervals (+1 cycle per LOAD):
 
-1. During the execute interval, calculate the effective address. At the
-   rising edge, issue the BRAM read and save the destination register and
-   sequential next PC; do not write the destination yet.
-2. During the wait interval, hold the PC and suppress all architectural
-   writes and side effects. The BRAM output is now valid.
-3. At the following rising edge, write the returned byte to the saved
-   destination and advance to the saved next PC. This is the LOAD retirement
-   edge. Stores and non-memory instructions retain one-cycle retirement.
+1. In the first LOAD interval, address and destination are decoded. At the
+   first rising edge, synchronous RAM captures the address and updates its
+   output register. The CPU does not write the destination, flags or PC.
+   MMIO reads do not access BRAM but use the same wait interval.
+2. During the second interval, hold PC at the LOAD and suppress architectural
+   writes. Expose the registered RAM byte, or current MMIO read value, to
+   writeback.
+3. At the second rising edge, write the value to the decoded destination and
+   advance PC by one. LOAD retires. Reset in either interval clears the wait
+   state and PC, suppresses writes, and restarts at address zero.
 
-Under this contract every LOAD adds exactly one cycle over the default
-single-cycle design. Verify register/memory/PC/flag retirement state against
-the default model and compare captured UART bytes. Add a golden-model
-`load_stall` cycle option that changes cycle timing only; use identical
-programs and require identical final architectural state and serial output.
-Exercise LOAD at normal RAM and boundary addresses, reset during each LOAD
-phase, and ensure a stalled instruction cannot duplicate MMIO writes. MMIO
-reads/writes should remain on the existing one-cycle path unless a separate
-timing decision explicitly includes them.
+STORE and all non-LOAD instructions retain their one-cycle behavior. STORE
+does not stall; a following LOAD samples memory after the STORE edge, so no
+read-during-write ambiguity is introduced. LOAD does not modify flags. PC
+holds for one extra interval and then advances once. No write or UART side
+effect is repeated during the wait.
+
+UART status and cycle-counter MMIO reads are sampled at LOAD commit after the
+extra interval, so they may differ from the default execution. UART and the
+cycle counter continue to advance during the wait. Busy-polling programs can
+therefore observe different peripheral timing and total cycles even when
+their final registers, RAM, flags, GPIO and accepted UART bytes match. This
+change is part of the experiment's behavior and must be reflected in the
+golden model.
+
+The golden model gets `load_stall=1`: it advances a cycle before sampling a
+LOAD's MMIO read value, then advances another cycle to complete that LOAD.
+RAM data is stable during the held interval. Hand-derived tests must first
+assert +1 for RAM and MMIO LOADs and no added cycle for STOREs, check PC and
+flags at both intervals, and exercise reset in both intervals. Then compare
+all program architectural outcomes and UART bytes and require exactly one
+additional cycle per executed LOAD.
 
 ## Required completion evidence
 
-- Build a GHDL-Yosys plugin compatible with the local GHDL 6.0.0 and Yosys
-  0.70, or use a known compatible toolchain; record exact versions.
-- Run A (baseline vs RAM stub) and report FF/LC/BRAM deltas.
-- Implement B only behind an opt-in generic/configuration; add default and
-  experimental simulator tests and golden-model cycle comparison.
-- Run at least seeds 1–5 at 12 MHz on HX8K and UP5K. Report LC/FF/BRAM and
-  routed Fmax; include placement failures rather than omitting them.
-- Keep all experimental changes on `exp-bram`; do not merge them into `main`
-  without an explicit design review.
+- Run baseline async RAM and report whether async distributed RAM exists.
+- Add the opt-in `LOAD_STALL` generic and sync-read RAM implementation.
+- Add hand-derived timing tests, load-stall model tests, all-demo comparisons,
+  quick/full differential fuzz under both simulators, and at least five
+  mutation spot checks of the new stall logic.
+- Synthesize and route seeds 1–8 at 12 and 50 MHz for HX8K and UP5K. Report
+  LC, FF, BRAM, Fmax and placement failures, plus demo CPI changes.
+- Run the full default configuration regression suite on this branch too.
+- Keep all experimental RTL and reports on `exp-bram`; do not merge the
+  implementation into `main`.
