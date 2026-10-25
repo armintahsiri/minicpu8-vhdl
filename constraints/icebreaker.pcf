@@ -1,28 +1,25 @@
-# iCEBreaker v1.0b (iCE40UP5K-SG48) pin constraints for MiniCPU-8.
-# Clock, UART and on-board I/O are from the published iCEBreaker pinout.
-# GPIO_IN is mapped to PMOD1A, intended for an external 8-bit DIP-switch PMOD.
-# LED[7:5] use the three RGB LED channels (the RGB LED is one package; its
-# polarity is not verified here). These assignments are NOT verified on
-# physical hardware. Re-check them against your board revision before use.
+# iCEBreaker UP5K-SG48. Pin choices follow the YosysHQ/IceStorm board PCF
+# and published iCEBreaker pinout; assignments are UNVERIFIED on hardware.
+set_io clk      35 # UNVERIFIED on hardware; 12 MHz clock (reference PCF)
+set_io rst_n    10 # UNVERIFIED on hardware; BTN_N, active-low (reference PCF)
+set_io uart_tx   9 # UNVERIFIED on hardware; FTDI TX pin (reference PCF)
 
-set_io clk      35
-set_io rst_n    10
-set_io uart_tx   9
+# Five discrete board LEDs and the three RGB channels.
+set_io led[0]   27 # UNVERIFIED on hardware; LED1 / PMOD2
+set_io led[1]   25 # UNVERIFIED on hardware; LED2 / PMOD2
+set_io led[2]   21 # UNVERIFIED on hardware; LED3 / PMOD2
+set_io led[3]   23 # UNVERIFIED on hardware; LED4 / PMOD2
+set_io led[4]   26 # UNVERIFIED on hardware; LED5 / PMOD2
+set_io led[5]   39 # UNVERIFIED on hardware; RGB red, active-low on reference PCF
+set_io led[6]   40 # UNVERIFIED on hardware; RGB green, active-low on reference PCF
+set_io led[7]   41 # UNVERIFIED on hardware; RGB blue, active-low on reference PCF
 
-set_io led[0]   26
-set_io led[1]   27
-set_io led[2]   25
-set_io led[3]   23
-set_io led[4]   21
-set_io led[5]   39
-set_io led[6]   40
-set_io led[7]   41
-
-set_io sw[0]     4
-set_io sw[1]     2
-set_io sw[2]    47
-set_io sw[3]    45
-set_io sw[4]     3
-set_io sw[5]    48
-set_io sw[6]    46
-set_io sw[7]    44
+# GPIO_IN is wired to PMOD1A; add a switch/logic-level module for use.
+set_io sw[0]     4 # UNVERIFIED on hardware; PMOD1A pin 1
+set_io sw[1]     2 # UNVERIFIED on hardware; PMOD1A pin 2
+set_io sw[2]    47 # UNVERIFIED on hardware; PMOD1A pin 3
+set_io sw[3]    45 # UNVERIFIED on hardware; PMOD1A pin 4
+set_io sw[4]     3 # UNVERIFIED on hardware; PMOD1A pin 7
+set_io sw[5]    48 # UNVERIFIED on hardware; PMOD1A pin 8
+set_io sw[6]    46 # UNVERIFIED on hardware; PMOD1A pin 9
+set_io sw[7]    44 # UNVERIFIED on hardware; PMOD1A pin 10

@@ -1,11 +1,10 @@
 ![CI](https://github.com/armintahsiri/minicpu8-vhdl/actions/workflows/test.yml/badge.svg)
 # MiniCPU-8
 
-An educational 8-bit **single-cycle CPU** written in VHDL-2008. Phase 3 takes
-the verified ISA v2 core to a demonstrable FPGA design: memory-mapped UART and
-GPIO, a second simulator (GHDL), four demo programs with CPU-level assertions,
-open-source synthesis and place-and-route with real resource/timing numbers,
-and post-synthesis netlist verification.
+An educational 8-bit **single-cycle CPU** written in VHDL-2008. It includes
+memory-mapped UART and GPIO, two-simulator verification, differential fuzzing,
+mutation checks, FPGA constraints and a hardware bring-up plan. The RTL and
+programs are simulation-verified; Phase 4 has not been run on a physical FPGA.
 
 The ISA itself is unchanged from Phase 2. `docs/ISA.md` is the normative
 specification and is mechanically cross-checked against the hardware,
@@ -118,8 +117,8 @@ prerequisites, so only changed units and their dependents are re-analysed.
 
 ### GHDL (second simulator)
 
-Requires GHDL with VHDL-2008 support (tested with GHDL 6.0.0; Ubuntu CI
-installs the distro `ghdl` package):
+Requires GHDL with VHDL-2008 support (tested with GHDL 6.0.0; CI pins the
+upstream 6.0.0 LLVM release):
 
 ```sh
 make test-ghdl
@@ -204,8 +203,29 @@ View them with GTKWave, Surfer, or any VCD viewer:
 gtkwave docs/waves/sum1to10.vcd
 ```
 
-GTKWave was not available in this environment, so no screenshot is included;
-the VCD files are committed instead.
+The repository also includes compact SVG timing views rendered from the VCDs:
+
+![sum1to10 timing diagram](docs/img/sum1to10.svg)
+
+![hello UART timing diagram](docs/img/hello_first_byte.svg)
+
+Recreate the source VCDs with `make waves`. The SVGs can be regenerated with
+`tools/vcd_to_svg.py`; use GTKWave or Surfer for interactive waveform browsing.
+
+## Phase 4 audit and hardware status
+
+`docs/AUDIT.md` records the verification audit, coverage limits, 23/23
+detected RTL mutations, and synthesis environment blocker. The full NVC and
+GHDL suites pass, as do the 200-program ALU/RAM and 40-program I/O differential
+fuzz runs. The fresh synthesis seed sweep could not run because
+`ghdl-yosys-plugin` is not installed in the audit environment; the Phase 3
+resource/timing figures above are historical measurements, not a fresh Phase
+4 result. No bitstream has been programmed on a physical board.
+
+See [`docs/BRINGUP.md`](docs/BRINGUP.md) for board selection, build/program
+commands, safe wiring, expected demo output and the hardware measurement log.
+The HX8K is the recommended first target; all PCF assignments remain marked
+unverified until tested on the exact board revision.
 
 ## Files
 

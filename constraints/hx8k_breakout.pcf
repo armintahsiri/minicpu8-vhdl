@@ -1,29 +1,25 @@
-# Lattice iCE40-HX8K Breakout Board (iCE40HX8K-CT256), 12 MHz oscillator.
-# Pins are taken from the board user guide / commonly used examples:
-#   clock J3, LEDs B5..C3, 40-pin header for UART/reset/switches.
-# GPIO_IN is mapped to eight header pins intended for an external DIP switch
-# or jumper field; the board itself has LEDs but no on-board DIP switches.
-# These assignments are NOT verified on physical hardware. Check your board
-# revision and the 40-pin header silkscreen before connecting anything.
+# Lattice iCE40-HX8K Breakout Board, iCE40HX8K-CT256, nominal 12 MHz.
+# Pin references: Lattice FPGA-EB-02031 user guide / vendor demo design.
+# Every assignment remains UNVERIFIED on hardware. Reset, UART-TX and switch
+# wiring have not been checked on a physical board.
+set_io clk      J3  # UNVERIFIED on hardware; vendor guide identifies clock input
+set_io rst_n    K11 # UNVERIFIED on hardware; proposed external active-low reset
+set_io uart_tx  B12 # UNVERIFIED on hardware; vendor schematic FTDI receive path
 
-set_io clk      J3
-set_io rst_n    K11
-set_io uart_tx  H16
+set_io led[0]   B5  # UNVERIFIED on hardware
+set_io led[1]   B4  # UNVERIFIED on hardware
+set_io led[2]   A2  # UNVERIFIED on hardware
+set_io led[3]   A1  # UNVERIFIED on hardware
+set_io led[4]   C5  # UNVERIFIED on hardware
+set_io led[5]   C4  # UNVERIFIED on hardware
+set_io led[6]   B3  # UNVERIFIED on hardware
+set_io led[7]   C3  # UNVERIFIED on hardware
 
-set_io led[0]   B5
-set_io led[1]   B4
-set_io led[2]   A2
-set_io led[3]   A1
-set_io led[4]   C5
-set_io led[5]   C4
-set_io led[6]   B3
-set_io led[7]   C3
-
-set_io sw[0]    G15
-set_io sw[1]    G16
-set_io sw[2]    F15
-set_io sw[3]    B12
-set_io sw[4]    B10
-set_io sw[5]    R15
-set_io sw[6]    R16
-set_io sw[7]    T14
+set_io sw[0]    G15 # UNVERIFIED on hardware; external switch/jumper input
+set_io sw[1]    G16 # UNVERIFIED on hardware; external switch/jumper input
+set_io sw[2]    F15 # UNVERIFIED on hardware; external switch/jumper input
+set_io sw[3]    R14 # UNVERIFIED on hardware; external switch/jumper input
+set_io sw[4]    R15 # UNVERIFIED on hardware; external switch/jumper input
+set_io sw[5]    H16 # UNVERIFIED on hardware; external switch/jumper input
+set_io sw[6]    R16 # UNVERIFIED on hardware; external switch/jumper input
+set_io sw[7]    T14 # UNVERIFIED on hardware; external switch/jumper input
