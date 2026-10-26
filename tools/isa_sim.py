@@ -94,7 +94,7 @@ def alu(op, a, b):
 class MiniCPU8:
     def __init__(self, words, ram=None, max_cycles=100000, gpio_in=0,
                  clks_per_bit=DEFAULT_CLKS_PER_BIT, max_uart_bytes=4096,
-                 load_stall=False):
+                 load_stall=False, gpio_schedule=None):
         if len(words) > 256:
             raise ValueError("program exceeds 256 words")
         if clks_per_bit < 1:
@@ -120,6 +120,8 @@ class MiniCPU8:
         self.trace = []
         # MMIO state. UART_TX bytes are captured in accepted-write order.
         self.gpio_in = gpio_in & 0xFF
+        self.gpio_schedule = sorted((int(c), int(v) & 0xFF)
+                                    for c, v in (gpio_schedule or [(0, self.gpio_in)]))
         self.gpio_out = 0
         self.uart_out = []
         self.uart_busy_until = -1
@@ -153,7 +155,14 @@ class MiniCPU8:
         if addr == IO_GPIO_OUT:
             return self.gpio_out
         if addr == IO_GPIO_IN:
-            return self.gpio_in
+            # The synchronizer's first input sample is at cycle c-2.
+            pin_cycle = self.cycles - 2
+            value = 0
+            for at, scheduled in self.gpio_schedule:
+                if at > pin_cycle:
+                    break
+                value = scheduled
+            return value
         if addr == IO_CYCLE_LO:
             return self.cycles & 0xFF
         # UART_TX is write-only; 0xF5..0xFF are reserved: read 0.
@@ -310,11 +319,12 @@ class MiniCPU8:
 
 def run_source(text, max_cycles=100000, gpio_in=0,
                clks_per_bit=DEFAULT_CLKS_PER_BIT, max_uart_bytes=4096,
-               load_stall=False):
+               load_stall=False, gpio_schedule=None):
     result = assembler.assemble_with_data(text)
     cpu = MiniCPU8(result.words, result.ram, max_cycles=max_cycles,
                    gpio_in=gpio_in, clks_per_bit=clks_per_bit,
-                   max_uart_bytes=max_uart_bytes, load_stall=load_stall)
+                   max_uart_bytes=max_uart_bytes, load_stall=load_stall,
+                   gpio_schedule=gpio_schedule)
     return cpu.run(), result
 
 
@@ -326,6 +336,7 @@ def main():
     ap.add_argument("--max-cycles", type=int, default=100000)
     ap.add_argument("--gpio-in", type=lambda s: int(s, 0), default=0,
                     help="GPIO_IN value supplied to the program (default 0)")
+    ap.add_argument("--gpio-schedule", help="GPIO pin schedule file: cycle value pairs (hex or decimal), last value holds")
     ap.add_argument("--clks-per-bit", type=int, default=DEFAULT_CLKS_PER_BIT,
                     help="UART busy model: clocks per bit (default 217 = "
                          "25MHz/115200)")
@@ -334,11 +345,26 @@ def main():
     args = ap.parse_args()
 
     try:
+        schedule = None
+        if args.gpio_schedule:
+            schedule = []
+            with open(args.gpio_schedule) as sf:
+                for line_no, line in enumerate(sf, 1):
+                    line = line.split("#", 1)[0].strip()
+                    if not line:
+                        continue
+                    parts = line.split()
+                    if len(parts) != 2:
+                        raise ValueError(f"{args.gpio_schedule}:{line_no}: expected cycle value")
+                    schedule.append((int(parts[0], 0), int(parts[1], 0)))
+            if not schedule or schedule[0][0] != 0 or any(c < 0 or c > 255 for c, _ in schedule):
+                raise ValueError("GPIO schedule must start at cycle 0 and use cycles 0..255")
         with open(args.input) as f:
             cpu, _ = run_source(f.read(), args.max_cycles,
                                 gpio_in=args.gpio_in,
                                 clks_per_bit=args.clks_per_bit,
-                                load_stall=args.load_stall)
+                                load_stall=args.load_stall,
+                                gpio_schedule=schedule)
     except assembler.AsmError as e:
         sys.exit(str(e))
     except OSError as e:

@@ -97,7 +97,7 @@ RUN := alu_tb register_file_tb flag_reg_tb pc_tb instr_rom_tb data_ram_tb \
 
 ALL_STAMPS := $(addprefix $(STAMPS)/,$(addsuffix .stamp,$(PKG_UNITS) $(SRC_UNITS) $(GEN_UNITS) $(TB_UNITS)))
 
-.PHONY: all test test-ghdl asmtest simtest consistency diversity mutation programs quickfuzz fuzz ioquickfuzz iofuzz synth synth-check pnr bitstream post-synth waves clean FORCE
+.PHONY: all test simulation-only test-ghdl asmtest simtest consistency diversity mutation programs quickfuzz fuzz ioquickfuzz iofuzz synth synth-check pnr bitstream post-synth waves clean FORCE
 
 all: test
 
@@ -219,6 +219,19 @@ test: asmtest simtest consistency diversity programs $(ALL_STAMPS)
 	@echo "==================================================="
 	@echo "ALL TESTBENCHES PASSED"
 	@echo "==================================================="
+
+# The mutation detector uses this target to prove a mutation is caught by
+# simulation, without allowing source-text consistency checks to count.
+simulation-only: programs $(ALL_STAMPS)
+	@set -e; for tb in $(RUN); do \
+	  echo "=== START $$tb ==="; \
+	  $(TEST_TIMEOUT) $(NVC) $(STD) $(WORK) -e $$tb -r; \
+	  echo "=== PASS $$tb ==="; \
+	done
+	@echo "=== quick differential fuzz (20 ALU/RAM programs) ==="
+	@python3 tools/fuzz.py --count 20 --seed 20251019 --dir build/fuzz_quick
+	@echo "=== quick I/O differential fuzz (8 programs) ==="
+	@python3 tools/fuzz.py --io --count 8 --seed 20251019 --dir build/iofuzz_quick
 
 # ---- GHDL: independent simulator, full VHDL-2008 analysis + simulation ---
 # Every unit is analysed in dependency order.  Each testbench must both exit

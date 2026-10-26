@@ -18,11 +18,11 @@ architecture sim of cpu_edge_tb is
   signal clk : std_logic := '0';
   signal rst : std_logic := '1';
 
-  signal halted_f, halted_b, halted_j, halted_e : std_logic;
-  signal pc_f, pc_b, pc_j, pc_e : byte_t;
-  signal fl_f, fl_b, fl_j, fl_e : std_logic_vector(3 downto 0);
-  signal rf_f, rf_b, rf_j, rf_e : regfile_t;
-  signal ram_f, ram_b, ram_j, ram_e : ram_t;
+  signal halted_f, halted_b, halted_j, halted_e, halted_cmp, halted_beq : std_logic;
+  signal pc_f, pc_b, pc_j, pc_e, pc_cmp, pc_beq : byte_t;
+  signal fl_f, fl_b, fl_j, fl_e, fl_cmp, fl_beq : std_logic_vector(3 downto 0);
+  signal rf_f, rf_b, rf_j, rf_e, rf_cmp, rf_beq : regfile_t;
+  signal ram_f, ram_b, ram_j, ram_e, ram_cmp, ram_beq : ram_t;
   constant EMPTY_RAM : ram_init_t(0 to 0) := (0 => x"00");
 
   -- forward wrap: jmp 0xFD; at 0xFD loadi r1,1; at 0xFE beq r0,r0,+2 -> 0x01
@@ -53,6 +53,12 @@ architecture sim of cpu_edge_tb is
   -- one-word program: execution runs off the end into the ROM's HALT filler
   constant PROG_END : rom_t(0 to 0) := (
     0 => x"9205");       -- loadi r1, 5
+
+  -- Hand-encoded cases make otherwise ignored instruction fields observable.
+  constant PROG_CMP : rom_t(0 to 4) := (
+    0 => x"9203", 1 => x"9405", 2 => x"9607", 3 => x"F653", 4 => x"F001");
+  constant PROG_BEQ : rom_t(0 to 4) := (
+    0 => x"9203", 1 => x"9405", 2 => x"A44A", 3 => x"9607", 4 => x"F001");
 
   constant MAX_CYCLES : natural := 50;
   signal done : boolean := false;
@@ -88,6 +94,20 @@ begin
               dbg_pc => pc_e, dbg_flags => fl_e, dbg_regs => rf_e,
               dbg_ram => ram_e);
 
+  dut_cmp : entity work.cpu_top
+    generic map (PROGRAM => PROG_CMP, RAM_INIT => EMPTY_RAM)
+    port map (clk => clk, rst => rst, halted => halted_cmp,
+              gpio_in => x"00", gpio_out => open, uart_tx => open,
+              dbg_pc => pc_cmp, dbg_flags => fl_cmp, dbg_regs => rf_cmp,
+              dbg_ram => ram_cmp);
+
+  dut_beq : entity work.cpu_top
+    generic map (PROGRAM => PROG_BEQ, RAM_INIT => EMPTY_RAM)
+    port map (clk => clk, rst => rst, halted => halted_beq,
+              gpio_in => x"00", gpio_out => open, uart_tx => open,
+              dbg_pc => pc_beq, dbg_flags => fl_beq, dbg_regs => rf_beq,
+              dbg_ram => ram_beq);
+
   stim : process
     variable errors : natural := 0;
     variable checks : natural := 0;
@@ -119,7 +139,8 @@ begin
     wait until rising_edge(clk);
 
     while (halted_f /= '1' or halted_b /= '1' or
-           halted_j /= '1' or halted_e /= '1') loop
+           halted_j /= '1' or halted_e /= '1' or
+           halted_cmp /= '1' or halted_beq /= '1') loop
       wait until rising_edge(clk);
       cycles := cycles + 1;
       exit when cycles > MAX_CYCLES;
@@ -150,6 +171,23 @@ begin
     expect_halted("fall off end", halted_e);
     expect_byte("fall off end r1", rf_e(1), x"05");
     expect_byte("fall off end pc", pc_e, x"01");
+
+    expect_halted("CMP case", halted_cmp);
+    expect_byte("CMP never writes encoded rd", rf_cmp(3), x"07");
+    expect_halted("BEQ field case", halted_beq);
+    expect_byte("BEQ compares rd-field register", rf_beq(3), x"07");
+
+    -- HALT must continue to freeze the PC on later clock edges.
+    for i in 1 to 3 loop
+      wait until rising_edge(clk);
+    end loop;
+    wait for 1 ns;
+    expect_byte("HALT keeps forward PC", pc_f, x"02");
+    expect_byte("HALT keeps backward PC", pc_b, x"03");
+    expect_byte("HALT keeps last-word PC", pc_j, x"FF");
+    expect_byte("HALT keeps end PC", pc_e, x"01");
+    expect_byte("HALT keeps CMP PC", pc_cmp, x"04");
+    expect_byte("HALT keeps BEQ PC", pc_beq, x"04");
 
     report "cpu_edge_tb: " & integer'image(checks) & " checks, " &
            integer'image(errors) & " errors (halted after " &

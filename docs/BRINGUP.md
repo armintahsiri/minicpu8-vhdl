@@ -17,27 +17,32 @@ switch inputs assumed by this wrapper; those need wiring. The B12 route and
 all other assignments still need continuity/hardware confirmation.
 
 The iCEBreaker is a convenient alternate for button, serial and PMOD access,
-with UP5K-SG48 and published pin mappings. A historical Phase 3 place-and-
-route attempt did not place this design on UP5K, so treat it as an experiment
-until the build is repeated with the current toolchain.
+with UP5K-SG48 and published pin mappings. The default asynchronous-RAM design
+is not a reliable UP5K fit: only 2/8 place-and-route seeds completed. A separate
+`exp-bram` branch experiment uses synchronous RAM reads and a one-cycle LOAD
+stall; it fit in one UP5K block RAM and routed on all eight seeds. That branch
+changes LOAD timing and peripheral sampling, so HX8K with the default design is
+the recommended first hardware target. See [`docs/AUDIT.md`](AUDIT.md) and
+[`docs/BRAM_EXPERIMENT.md`](BRAM_EXPERIMENT.md) for the measurements and
+behavioral trade-offs.
 
 ## Build the image
 
 Install NVC, GHDL 6.0, Yosys with the matching `ghdl-yosys-plugin`,
-nextpnr-ice40 and IceStorm. On macOS, the package names are available through
-Homebrew (`nvc`, `ghdl`, `yosys`, `nextpnr`, `icestorm`); build the GHDL plugin
-against the same GHDL/Yosys libraries. The repository's synthesis flow was
-not executable in the audit environment because that plugin was absent.
+nextpnr-ice40 and IceStorm. On macOS, the default Makefile paths use the local
+GHDL installation under `~/tools`; override `GHDL_PLUGIN` and `GHDL_PREFIX`
+when your installation differs. `make synth-check` checks the synthesis
+toolchain and builds the hello image.
 
 ```sh
 make test
-make PROGRAM=hello BOARD=hx8k_breakout bitstream FREQ=12
+make PROGRAM=hello BOARD=hx8k_breakout FREQ=12 SEED=1 bitstream
 ```
 
 `BOARD=hx8k_breakout` is the default. To try the alternate board:
 
 ```sh
-make PROGRAM=hello BOARD=icebreaker bitstream FREQ=12
+make PROGRAM=hello BOARD=icebreaker FREQ=12 SEED=1 bitstream
 ```
 
 The output is `build/synth/fpga_top.bin`; `PROGRAM` may be `hello`,
@@ -59,7 +64,9 @@ board guide before changing that configuration. This project has not tested
 either programming path on physical hardware.
 
 Open the board's FTDI serial port at **115200 baud, 8 data bits, no parity,
-1 stop bit (8N1)**. On macOS, identify it with `ls /dev/cu.usb*`, then use
+1 stop bit (8N1)**. With the nominal 12 MHz board clock, the integer divider
+is 104 clocks, yielding 115,384.615 baud (+0.1603%). On macOS, identify it with
+`ls /dev/cu.usb*`, then use
 `python3 -m serial.tools.miniterm /dev/cu.usbserial-DEVICE 115200` (install
 pyserial if needed). For `hello`, expect exactly:
 

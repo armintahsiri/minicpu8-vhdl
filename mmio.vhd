@@ -38,6 +38,14 @@ begin
   -- policy: there is no queue and no overwrite of an in-flight byte.
   uart_wr <= '1' when we = '1' and addr = IO_UART_TX and uart_busy = '0'
              else '0';
+  busy_write_guard : process (clk) is
+  begin
+    if rising_edge(clk) then
+      assert not (we = '1' and addr = IO_UART_TX and uart_busy = '1' and
+                  uart_wr = '1')
+        report "MMIO asserted uart_wr while transmitter busy" severity failure;
+    end if;
+  end process;
   gpio_we <= '1' when we = '1' and addr = IO_GPIO_OUT else '0';
 
   uart_i : entity work.uart_tx

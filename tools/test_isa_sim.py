@@ -328,6 +328,22 @@ eq("UART write-while-busy ignored", cpu.uart_out, [0x15])
 eq("GPIO_IN parameter read", cpu.regs[6], 0xA5)
 eq("GPIO_OUT initial zero", cpu.regs[7], 0x00)
 
+# Hand-derived synchronizer table: a LOAD executing in cycle c observes the
+# pin schedule from c-2. Initial/reset value is zero.
+gpio_schedule = [(0, 0x10), (2, 0x20), (4, 0x40)]
+gpio_latency_prog = """
+        loadi r1, GPIO_IN
+        load r2, [r1+0]   ; c=1 -> initial/reset value
+        nop
+        load r3, [r1+0]   ; c=3 -> schedule value at c=1
+        load r4, [r1+0]   ; c=4 -> schedule value at c=2
+        nop
+        load r5, [r1+0]   ; c=6 -> schedule value at c=4
+        halt
+"""
+cpu, _ = run(gpio_latency_prog, gpio_schedule=gpio_schedule)
+eq("GPIO schedule latency c-2", cpu.regs[2:6], [0x00, 0x10, 0x20, 0x40])
+
 gpio_prog = """
         loadi r1, 0x15
         store r1, [r0+GPIO_OUT]

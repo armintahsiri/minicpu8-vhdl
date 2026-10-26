@@ -328,7 +328,161 @@ The default UP5K design is marginal and not reliably placeable: only 2/8 seeds
 completed, both below 16 MHz, while the 12 MHz-target runs that did complete
 passed the requested frequency. It is not a robust board-fit result. HX8K
 completed 8/8 at 12 MHz and is the supported default target. The HX8K
-12 MHz-target bitstream built in the seed-1 route; it was 135,100 bytes.
+12 MHz-target bitstream built in the seed-1 route; it was 135,100 bytes. After
+the branch experiment was complete, the recommended default image was rebuilt
+on `main` with `make PROGRAM=hello BOARD=hx8k_breakout FREQ=12 SEED=1
+bitstream`; it completed synthesis, routing and `icepack`, with final routed
+Fmax 38.46 MHz (PASS at 12 MHz) and the same 135,100-byte binary. This is still
+an unprogrammed bitstream; no physical-board behavior was measured.
+
+The first bring-up recommendation is therefore the default design on HX8K.
+The `exp-bram` UP5K result is a useful next hardware experiment if a board is
+available, but it adds one cycle to each LOAD and changes the instant at which
+MMIO reads sample counters and UART status. It remains isolated from `main`.
+
+## Final `main` verification
+
+After the documentation and board decision were committed, the final clean
+regression completed on `main` with:
+
+```sh
+make clean && make test && make test-ghdl && make fuzz && make iofuzz && make mutation
+```
+
+All NVC and GHDL testbenches passed; the 200-program ALU/RAM and 40-program
+I/O differential fuzz runs had zero mismatches; and all 23 RTL mutations were
+detected. `p4b-final` marks this verified `main` state. No push was performed.
+
+## Phase 4C baseline (2026-10-26)
+
+Before edits, the working tree was clean on `main` at `p4b-final`; `exp-bram`
+existed and the configured identity was Armin Tahsiri <itsarmintahsiri@gmail.com>.
+A create/delete write probe succeeded. No files were changed by the probe.
+
+Baseline command: `make clean && make test && make test-ghdl && make fuzz && make iofuzz && make mutation`.
+Every command exited successfully. The observed wall times from `/usr/bin/time -p`
+were: clean 0.06 s, `make test` 9.09 s, `make test-ghdl` 13.87 s, `make fuzz`
+0.87 s, `make iofuzz` 0.50 s, and `make mutation` 55.00 s (about 79.4 s total,
+excluding command startup). The NVC and GHDL benches passed; full ALU/RAM fuzz
+reported 200 programs and 0 mismatches; full I/O fuzz reported 40 programs and
+0 mismatches; baseline mutation detection was 23/23. Mutations 10, 11, 12, 13,
+and 21 were caught in the consistency/diversity precheck; mutation 17 was
+caught only by quick fuzz. These are the gaps Phase 4C must close.
+
+Tool versions recorded on this host: Python 3.12.8, NVC 1.23.0, GHDL 6.0.0
+(6.0.0.r0.ge589c698c), Yosys 0.70+post (git 0c11ea09), nextpnr-ice40 reports
+`Version` without a number from its `--version` command (a real route banner is
+needed for a complete version record), Ruby 2.6.10p210, and Git 2.54.0. The
+baseline did not run synthesis or place-and-route.
+
+### GPIO_IN deterministic schedule work
+
+The golden model now accepts `gpio_schedule=[(cycle, value), ...]`; the CLI
+accepts `--gpio-schedule` with `cycle value` lines and `#` comments. The last
+scheduled value holds. Reads use the input at cycle `c-2`; a read before cycle
+2 sees reset value 0. The model default pin value is represented as the cycle-0
+schedule value, preserving static-pin callers after the two synchronization
+edges.
+
+Hand-derived check table (program read cycles are counted from cycle 0):
+
+| LOAD cycle c | pin schedule cycle c-2 | expected GPIO_IN |
+|---:|---:|---:|
+| 1 | before cycle 0 | 0x00 (reset) |
+| 3 | 1 | 0x10 |
+| 4 | 2 | 0x20 |
+| 6 | 4 | 0x40 |
+
+`tools/test_isa_sim.py` runs a directed program against this schedule and all
+four values matched. `make test` passed after the model/spec change. The RTL
+still has its existing component-level two-edge GPIO test and constant-input
+CPU test; a file-driven schedule in the RTL CPU harness and randomized schedule
+I/O differential mode have not yet been added or run.
+
+### Phase 4C board wrapper, synthesis and CI checks
+
+`fpga_top.vhd` maps `DEBUG => false`; the wrapper has only clk, reset, UART,
+LED and switch ports. It maps `dbg_pc`, `dbg_flags`, `dbg_regs` and `dbg_ram` to
+`open`. The synthesized JSON hierarchy likewise reports five top-level ports,
+not debug ports. The 4,197 LCs / 2,032 FFs from `make synth-check` therefore
+represent the board build with the non-consumed debug observations optimized
+away; the PC and register file still exist as architectural state. I did not
+build a second wrapper retaining debug ports, so there is no measured with/without
+delta.
+
+`make synth-check` passed on 2026-10-26 with Yosys 0.70+post, GHDL 6.0.0 and
+the local GHDL plugin. `make PROGRAM=hello BOARD=hx8k_breakout FREQ=12 SEED=1
+pnr` passed and packed a bitstream. The actual run reported 4,197/7,680 LCs,
+zero BRAM, placement Fmax 37.56 MHz, and routed Fmax 38.46 MHz (pass at 12 MHz).
+The critical path source is named `core.dbg_pc...` because the PC state is also
+observed by the debug assignment; it is architectural PC state, not a separate
+debug register bank. The nextpnr output log contained no version banner and
+`nextpnr-ice40 --version` returned a blank version field. The run did not test
+placement at another target frequency, sweep eight seeds, or route UP5K.
+
+CI action upgrades were checked against their real upstream release pages:
+`actions/checkout@v5`, `actions/setup-python@v6`, and `actions/cache@v5` exist;
+their Node 24 releases require runner 2.327.1 or later. The workflow uses
+GitHub-hosted Ubuntu 24.04, but CI remains unverified until push. YAML parsed
+successfully with `ruby -ryaml`. No tracked generated junk was present. Existing
+PCF entries and citations in `docs/BRINGUP.md` identify pin sources and mark
+assignments UNVERIFIED; hardware remains untested.
+
+### Phase 4C behavioural mutation results
+
+`tools/mutation_check.py --simulation-only` runs the directed NVC testbenches
+and quick differential fuzz in each isolated source copy without invoking the
+consistency checker, diversity checker, assembler unit tests, or Python model
+unit tests as detectors. The classifier now labels fuzz-only only when a
+nonzero differential mismatch is present; an undetected mutation remains
+undetected instead of being counted because fuzz happened to run.
+
+| Detector class | Before (23 mutations) | After (36 mutations) |
+|---|---:|---:|
+| Directed simulation | 17 | 36 |
+| Differential fuzz only | 1 | 0 |
+| Source checker only | 5 | 0 |
+| Surviving / undetected | 0 | 0 |
+
+The five formerly source-only cases (MMIO lower-bound decode, UART busy-write
+gate, GPIO synchronizer stage, reset register-write gate, and RAM write enable)
+were all caught by testbenches in the checker-excluded sweep. The CALL-link
+case is now a meaningful wrong-writeback-value mutation and is caught by the
+control-unit testbench. A separate earlier CALL destination mutation was
+replaced: `instr(11:9)` already equals `R7` for a CALL encoding (`cond=1111`),
+so changing the explicit R7 mux to that field is an equivalent mutation.
+
+Thirteen new mutations were added: LOAD/STORE/JMP flag preservation, BEQ
+operand-field selection, CMP register-write suppression, STORE data-field
+selection, shared BHS/BLO condition behavior, reserved MMIO reads, GPIO_OUT
+readback, cycle-counter reset, UART bit order, SHL edge behavior, and HALT PC
+freeze (13 total including the three flag cases). The full 36-case simulation-
+only sweep passed 36/36 (100%); all 13 new cases passed, above the 90% target.
+No survivors needed expected-value changes. The additional MMIO clock-edge
+assertion checks the UART busy-write invariant without observing transient
+delta-cycle values.
+
+Behavioral tests now exercise reset gating, MMIO range and reserved reads,
+UART busy/frame behavior and data order, GPIO synchronization/readback, cycle
+counter reset/wrap, per-instruction-class flag controls, CMP write suppression,
+BEQ field selection, PC wrap, and HALT PC freeze. `check_consistency.py` remains
+as a supplementary source-level cross-check, not the only detector for these
+properties.
+
+### Final Phase 4C mainline regression
+
+On the final `main` source state before branch integration, the requested clean
+chain completed successfully:
+
+```sh
+make clean && make test && make test-ghdl && make fuzz && make iofuzz && make mutation
+```
+
+NVC and GHDL reported all benches passed; the 200-program ALU/RAM and
+40-program I/O fuzz runs had 0 mismatches; all 36 mutations were detected in
+the normal checker-enabled target. The enclosing wall time was 113.45 s on this
+host. This is local verification only; the GitHub Actions workflow is
+unverified until a push triggers it.
 
 ### EXPERIMENT — `exp-bram` synchronous RAM
 
@@ -425,3 +579,23 @@ documents UP5K-SG48, 5,280 LCs, FT2232H and 12 MHz crystal. The checked
 matches pins 35 clock, 10 BTN_N, 9 TX, LEDs 27/25/21/23/26 and RGB 39/40/41;
 its PMOD1A pins match 4/2/47/45/3/48/46/44. Those documents validate the
 reference pin choices, not the assembled project's wiring or operation.
+
+### Phase 4C integration verification on `exp-bram`
+
+Per the phase request, the verified `main` state was merged into `exp-bram`
+before this branch's check. On the merged branch, `make clean && make test &&
+make test-ghdl && make fuzz && make iofuzz` passed in the default
+`LOAD_STALL=false` configuration. The subsequent `make mutation` exposed that
+new mutation 36 used a main-only PC port-map anchor; that anchor was changed to
+the experiment's equivalent `pc_en` equation and then `make mutation` passed
+36/36. Thus each requested default suite component passed on the merged branch,
+though the chain was not rerun as one uninterrupted command after the anchor
+repair.
+
+With `LOAD_STALL=true`, 200 ALU/RAM and 40 I/O differential programs each
+passed under NVC and GHDL with zero mismatches (seed 20251019); the targeted
+load-stall logic mutations passed 5/5. The first GHDL fuzz invocation omitted
+the host's non-PATH GHDL binary; rerunning with
+`--ghdl /Users/armin/tools/ghdl/bin/ghdl` completed successfully. The
+`LOAD_STALL` implementation remains only on `exp-bram`; no code was promoted
+from this branch into main.
