@@ -398,3 +398,73 @@ four values matched. `make test` passed after the model/spec change. The RTL
 still has its existing component-level two-edge GPIO test and constant-input
 CPU test; a file-driven schedule in the RTL CPU harness and randomized schedule
 I/O differential mode have not yet been added or run.
+
+### Phase 4C board wrapper, synthesis and CI checks
+
+`fpga_top.vhd` maps `DEBUG => false`; the wrapper has only clk, reset, UART,
+LED and switch ports. It maps `dbg_pc`, `dbg_flags`, `dbg_regs` and `dbg_ram` to
+`open`. The synthesized JSON hierarchy likewise reports five top-level ports,
+not debug ports. The 4,197 LCs / 2,032 FFs from `make synth-check` therefore
+represent the board build with the non-consumed debug observations optimized
+away; the PC and register file still exist as architectural state. I did not
+build a second wrapper retaining debug ports, so there is no measured with/without
+delta.
+
+`make synth-check` passed on 2026-10-26 with Yosys 0.70+post, GHDL 6.0.0 and
+the local GHDL plugin. `make PROGRAM=hello BOARD=hx8k_breakout FREQ=12 SEED=1
+pnr` passed and packed a bitstream. The actual run reported 4,197/7,680 LCs,
+zero BRAM, placement Fmax 37.56 MHz, and routed Fmax 38.46 MHz (pass at 12 MHz).
+The critical path source is named `core.dbg_pc...` because the PC state is also
+observed by the debug assignment; it is architectural PC state, not a separate
+debug register bank. The nextpnr output log contained no version banner and
+`nextpnr-ice40 --version` returned a blank version field. The run did not test
+placement at another target frequency, sweep eight seeds, or route UP5K.
+
+CI action upgrades were checked against their real upstream release pages:
+`actions/checkout@v5`, `actions/setup-python@v6`, and `actions/cache@v5` exist;
+their Node 24 releases require runner 2.327.1 or later. The workflow uses
+GitHub-hosted Ubuntu 24.04, but CI remains unverified until push. YAML parsed
+successfully with `ruby -ryaml`. No tracked generated junk was present. Existing
+PCF entries and citations in `docs/BRINGUP.md` identify pin sources and mark
+assignments UNVERIFIED; hardware remains untested.
+
+### Phase 4C behavioural mutation results
+
+`tools/mutation_check.py --simulation-only` runs the directed NVC testbenches
+and quick differential fuzz in each isolated source copy without invoking the
+consistency checker, diversity checker, assembler unit tests, or Python model
+unit tests as detectors. The classifier now labels fuzz-only only when a
+nonzero differential mismatch is present; an undetected mutation remains
+undetected instead of being counted because fuzz happened to run.
+
+| Detector class | Before (23 mutations) | After (36 mutations) |
+|---|---:|---:|
+| Directed simulation | 17 | 36 |
+| Differential fuzz only | 1 | 0 |
+| Source checker only | 5 | 0 |
+| Surviving / undetected | 0 | 0 |
+
+The five formerly source-only cases (MMIO lower-bound decode, UART busy-write
+gate, GPIO synchronizer stage, reset register-write gate, and RAM write enable)
+were all caught by testbenches in the checker-excluded sweep. The CALL-link
+case is now a meaningful wrong-writeback-value mutation and is caught by the
+control-unit testbench. A separate earlier CALL destination mutation was
+replaced: `instr(11:9)` already equals `R7` for a CALL encoding (`cond=1111`),
+so changing the explicit R7 mux to that field is an equivalent mutation.
+
+Thirteen new mutations were added: LOAD/STORE/JMP flag preservation, BEQ
+operand-field selection, CMP register-write suppression, STORE data-field
+selection, shared BHS/BLO condition behavior, reserved MMIO reads, GPIO_OUT
+readback, cycle-counter reset, UART bit order, SHL edge behavior, and HALT PC
+freeze (13 total including the three flag cases). The full 36-case simulation-
+only sweep passed 36/36 (100%); all 13 new cases passed, above the 90% target.
+No survivors needed expected-value changes. The additional MMIO clock-edge
+assertion checks the UART busy-write invariant without observing transient
+delta-cycle values.
+
+Behavioral tests now exercise reset gating, MMIO range and reserved reads,
+UART busy/frame behavior and data order, GPIO synchronization/readback, cycle
+counter reset/wrap, per-instruction-class flag controls, CMP write suppression,
+BEQ field selection, PC wrap, and HALT PC freeze. `check_consistency.py` remains
+as a supplementary source-level cross-check, not the only detector for these
+properties.

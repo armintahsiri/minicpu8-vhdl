@@ -33,13 +33,26 @@ MUTATIONS = [
     (14, "PC reset value", "pc.vhd", "cnt <= (others => '0');", "cnt <= cnt;"),
     (15, "SHL data result", "alu.vhd", "res := ua(6 downto 0) & '0';", "res := '0' & ua(7 downto 1);"),
     (16, "CMP flag write", "control_unit.vhd", "when FUNC_CMP  => flag_write <= '1'; alu_op <= ALU_SUB;", "when FUNC_CMP  => null;"),
-    (17, "CALL link destination", "cpu_top.vhd", "waddr <= \"111\" when link = '1' else instr(11 downto 9);", "waddr <= instr(11 downto 9);"),
+    (17, "CALL link stores wrong value", "control_unit.vhd", "link <= '1'; reg_write <= '1'; wb_sel <= WB_PC1;", "link <= '1'; reg_write <= '1'; wb_sel <= WB_ALU;"),
     (18, "RET target source", "cpu_top.vhd", "                 rd1               when PC_R7,", "                 pc_plus1          when PC_R7,"),
     (19, "BCS/BCC branch decode", "branch_cond.vhd", "when COND_BCS => taken <= c;      -- unsigned >=", "when COND_BCS => taken <= not c;  -- mutated"),
     (20, "UART integer divisor", "uart_tx.vhd", "constant CLKS_PER_BIT : positive := CLK_FREQ / BAUD;", "constant CLKS_PER_BIT : positive := CLK_FREQ / BAUD - 1;"),
     (21, "RAM write enable", "data_ram.vhd", "if we = '1' then", "if we = '0' then"),
     (22, "UART busy status bit", "mmio.vhd", "rdata(0) <= uart_busy;", "rdata(0) <= not uart_busy;"),
     (23, "RAM effective address wrap", "cpu_top.vhd", "ram_addr <= alu_result when (mem_read = '1' or mem_write = '1')", "ram_addr <= std_logic_vector(unsigned(alu_result) + 1) when (mem_read = '1' or mem_write = '1')"),
+    (24, "LOAD incorrectly writes flags", "control_unit.vhd", "reg_write <= '1'; mem_read <= '1'; alu_src_imm <= '1';", "reg_write <= '1'; mem_read <= '1'; flag_write <= '1'; alu_src_imm <= '1';"),
+    (25, "STORE incorrectly writes flags", "control_unit.vhd", "mem_write <= '1'; alu_src_imm <= '1'; rd2_from_rd <= '1';", "mem_write <= '1'; flag_write <= '1'; alu_src_imm <= '1'; rd2_from_rd <= '1';"),
+    (26, "JMP incorrectly writes flags", "control_unit.vhd", "when COND_JMP => pc_sel <= PC_ABS; cond_out <= COND_JMP;", "when COND_JMP => pc_sel <= PC_ABS; flag_write <= '1'; cond_out <= COND_JMP;"),
+    (27, "BEQ selects rt from wrong field", "control_unit.vhd", "pc_sel <= PC_REL_EQ; rd2_from_rd <= '1';", "pc_sel <= PC_REL_EQ; rd2_from_rd <= '0';"),
+    (28, "CMP writes rd register", "control_unit.vhd", "when FUNC_CMP  => flag_write <= '1'; alu_op <= ALU_SUB;", "when FUNC_CMP  => reg_write <= '1'; flag_write <= '1'; alu_op <= ALU_SUB;"),
+    (29, "STORE selects data from wrong field", "control_unit.vhd", "mem_write <= '1'; alu_src_imm <= '1'; rd2_from_rd <= '1';", "mem_write <= '1'; alu_src_imm <= '1'; rd2_from_rd <= '0';"),
+    (30, "BHS/BLO shared condition truth", "branch_cond.vhd", "when COND_BCS => taken <= c;      -- unsigned >=", "when COND_BCS => taken <= not c;  -- mutated shared alias"),
+    (31, "reserved MMIO read value", "mmio.vhd", "rdata <= x\"00\";                       -- write-only / reserved reads", "rdata <= x\"FF\";                       -- mutated reserved value"),
+    (32, "GPIO_OUT readback", "gpio.vhd", "rd_out  <= out_reg;", "rd_out  <= (others => '0');"),
+    (33, "cycle-counter reset", "cycle_counter.vhd", "cnt <= (others => '0');", "cnt <= cnt;"),
+    (34, "UART data order is MSB-first", "uart_tx.vhd", "tx_r    <= shift(0);         -- first data bit", "tx_r    <= shift(7);         -- mutated order"),
+    (35, "SHL one-bit edge behavior", "alu.vhd", "res := ua(6 downto 0) & '0';        -- B ignored; 1-bit logical left", "res := '0' & ua(7 downto 1);        -- mutated shift"),
+    (36, "HALT does not freeze PC", "cpu_top.vhd", "en => not halt_int, load => pc_load,", "en => '1', load => pc_load,"),
 ]
 
 
@@ -51,8 +64,8 @@ def classify(output, returncode):
                 tb = parts[2] if len(parts) > 2 else "unknown"
                 if f"=== PASS {tb} ===" not in output:
                     return "directed", tb
-        if "quick differential fuzz" in output:
-            return "fuzz-only", "quickfuzz"
+    if returncode != 0 and ("MISMATCHED" in output or "mismatch" in output.lower()):
+        return "fuzz-only", "differential fuzz"
     if "FUZZ DIVERSITY" in output or "consistency check" in output:
         return "precheck", "consistency/diversity"
     if returncode == 0:
@@ -64,6 +77,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--only", type=int, nargs="*", help="run only these mutation ids")
     parser.add_argument("--timeout", type=int, default=90)
+    parser.add_argument("--simulation-only", action="store_true",
+                        help="exclude consistency, diversity, assembler and model checks")
     args = parser.parse_args()
     selected = [m for m in MUTATIONS if args.only is None or m[0] in args.only]
     rows = []
@@ -81,7 +96,8 @@ def main():
                 raise SystemExit(f"mutation {mid}: expected one source match, found {count}: {old!r}")
             src.write_text(text.replace(old, new, 1), encoding="utf-8")
             try:
-                proc = subprocess.run(["make", "test"], cwd=case, text=True,
+                target = "simulation-only" if args.simulation_only else "test"
+                proc = subprocess.run(["make", target], cwd=case, text=True,
                                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                       timeout=args.timeout)
                 output = proc.stdout
