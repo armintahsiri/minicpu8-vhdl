@@ -312,9 +312,11 @@ the CPU clock and there are no interrupts.
   are sampled on rising edges, and the last scheduled value holds. The initial
   and reset value of both synchronizer stages is `0x00`, so reads during the
   first two cycles after reset observe `0x00`. Writes to `GPIO_IN` are ignored.
-  Golden-model and test schedules use whitespace-separated `cycle value`
-  pairs, starting at cycle 0 (base-0 integers are accepted; comments begin
-  with `#`).
+  The golden model and RTL I/O-fuzz harness read the same whitespace-separated
+  `cycle value` schedule file. It must start at cycle 0; cycles are strictly
+  increasing in `0..255` and values are bytes in `0..255`. Base-0 integer
+  notation is accepted, blank lines are ignored, and `#` begins a comment.
+  With no schedule, the model holds the `--gpio-in` value from cycle 0.
 
 ### Cycle counter (`0xF4`)
 

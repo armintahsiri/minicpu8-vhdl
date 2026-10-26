@@ -51,6 +51,28 @@ def sgn8(x):
     return x - 256 if x & 0x80 else x
 
 
+def read_gpio_schedule(path):
+    """Read the shared cycle/value schedule format documented in ISA.md."""
+    schedule = []
+    with open(path, encoding="utf-8") as sf:
+        for line_no, line in enumerate(sf, 1):
+            line = line.split("#", 1)[0].strip()
+            if not line:
+                continue
+            parts = line.split()
+            if len(parts) != 2:
+                raise ValueError(f"{path}:{line_no}: expected cycle value")
+            cycle, value = int(parts[0], 0), int(parts[1], 0)
+            if cycle < 0 or cycle > 255 or value < 0 or value > 255:
+                raise ValueError(f"{path}:{line_no}: cycle/value out of range")
+            schedule.append((cycle, value))
+    if not schedule or schedule[0][0] != 0:
+        raise ValueError("GPIO schedule must start at cycle 0")
+    if any(b[0] <= a[0] for a, b in zip(schedule, schedule[1:])):
+        raise ValueError("GPIO schedule cycles must be strictly increasing")
+    return schedule
+
+
 def alu(op, a, b):
     """Return (result, Z, N, C, V) exactly like alu.vhd."""
     a &= 0xFF
@@ -338,18 +360,7 @@ def main():
     try:
         schedule = None
         if args.gpio_schedule:
-            schedule = []
-            with open(args.gpio_schedule) as sf:
-                for line_no, line in enumerate(sf, 1):
-                    line = line.split("#", 1)[0].strip()
-                    if not line:
-                        continue
-                    parts = line.split()
-                    if len(parts) != 2:
-                        raise ValueError(f"{args.gpio_schedule}:{line_no}: expected cycle value")
-                    schedule.append((int(parts[0], 0), int(parts[1], 0)))
-            if not schedule or schedule[0][0] != 0 or any(c < 0 or c > 255 for c, _ in schedule):
-                raise ValueError("GPIO schedule must start at cycle 0 and use cycles 0..255")
+            schedule = read_gpio_schedule(args.gpio_schedule)
         with open(args.input) as f:
             cpu, _ = run_source(f.read(), args.max_cycles,
                                 gpio_in=args.gpio_in,

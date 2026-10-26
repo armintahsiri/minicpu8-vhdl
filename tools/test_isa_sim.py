@@ -344,6 +344,28 @@ gpio_latency_prog = """
 cpu, _ = run(gpio_latency_prog, gpio_schedule=gpio_schedule)
 eq("GPIO schedule latency c-2", cpu.regs[2:6], [0x00, 0x10, 0x20, 0x40])
 
+# Boundary-directed checks: a pin transition one cycle before, on, or one
+# cycle after a LOAD is still gated by the c-2 synchronizer contract.
+gpio_boundary_prog = """
+        loadi r1, GPIO_IN
+        nop
+        nop
+        nop
+        load r2, [r1+0]   ; c=4
+        nop
+        load r3, [r1+0]   ; c=6
+        nop
+        load r4, [r1+0]   ; c=8
+        halt
+"""
+for label, transition, expected in (
+        ("one cycle before", 3, [0x11, 0x55, 0x55]),
+        ("same cycle", 4, [0x11, 0x55, 0x55]),
+        ("one cycle after", 5, [0x11, 0x11, 0x55])):
+    cpu, _ = run(gpio_boundary_prog,
+                 gpio_schedule=[(0, 0x11), (transition, 0x55)])
+    eq(f"GPIO transition {label} read", cpu.regs[2:5], expected)
+
 gpio_prog = """
         loadi r1, 0x15
         store r1, [r0+GPIO_OUT]

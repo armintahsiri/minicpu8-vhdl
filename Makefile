@@ -58,6 +58,7 @@ SEED      ?= 1
 FPGA_BUILD  := build/synth
 FPGA_PKG    := $(FPGA_BUILD)/fpga_program.vhd
 SYNTH_JSON  := $(FPGA_BUILD)/fpga_top.json
+PNR_JSON    := $(FPGA_BUILD)/fpga_top_pnr.json
 SYNTH_LOG   := $(FPGA_BUILD)/yosys.log
 PNR_LOG     := $(FPGA_BUILD)/nextpnr.log
 PNR_ASC     := $(FPGA_BUILD)/fpga_top.asc
@@ -96,7 +97,7 @@ RUN := alu_tb register_file_tb flag_reg_tb pc_tb instr_rom_tb data_ram_tb \
 
 ALL_STAMPS := $(addprefix $(STAMPS)/,$(addsuffix .stamp,$(PKG_UNITS) $(SRC_UNITS) $(GEN_UNITS) $(TB_UNITS)))
 
-.PHONY: all test simulation-only test-ghdl asmtest simtest consistency diversity mutation programs quickfuzz fuzz ioquickfuzz iofuzz synth synth-check pnr bitstream post-synth waves clean FORCE
+.PHONY: all test simulation-only test-ghdl asmtest simtest consistency diversity mutation programs quickfuzz fuzz ioquickfuzz iofuzz gpio-schedule-check synth synth-check pnr bitstream post-synth waves clean FORCE
 
 all: test
 
@@ -124,10 +125,16 @@ fuzz:
 	python3 tools/fuzz.py --count 200 --seed 20251019 --dir build/fuzz
 
 ioquickfuzz:
-	python3 tools/fuzz.py --io --count 8 --seed 20251019 --dir build/iofuzz_quick
+	python3 tools/fuzz.py --io --count 8 --seed 20251019 --dir build/iofuzz_quick --random-gpio-schedule --ghdl $(GHDL_ABS)
 
 iofuzz:
-	python3 tools/fuzz.py --io --count 40 --seed 20251019 --dir build/iofuzz
+	python3 tools/fuzz.py --io --count 40 --seed 20251019 --dir build/iofuzz --random-gpio-schedule --ghdl $(GHDL_ABS)
+
+gpio-schedule-check:
+	@set -e; for cycle in 3 4 5; do \
+	  python3 tools/fuzz.py --io --gpio-boundary --gpio-transition-cycle $$cycle \
+	    --seed 20251019 --dir build/gpio-boundary-$$cycle --ghdl $(GHDL_ABS); \
+	done
 
 # ---- generated ROM+RAM packages (one file per program) -------------------
 %_rom.vhd: programs/%.asm tools/assembler.py
@@ -308,8 +315,9 @@ waves: programs
 	@echo "WAVEFORMS: docs/waves/sum1to10.vcd docs/waves/hello_first_byte.vcd"
 
 pnr: synth
+	@$(YOSYS) -Q -p 'read_json $(SYNTH_JSON); delete t:$$assert; write_json $(PNR_JSON)' > $(FPGA_BUILD)/pnr-json.log
 	@set -o pipefail; \
-	$(NEXTPNR) --$(DEVICE) --package $(PACKAGE) --json $(SYNTH_JSON) \
+	$(NEXTPNR) --$(DEVICE) --package $(PACKAGE) --json $(PNR_JSON) \
 	  --pcf $(PCF) --freq $(FREQ) --seed $(SEED) --asc $(PNR_ASC) \
 	  --report $(FPGA_BUILD)/nextpnr-report.json 2>&1 | tee $(PNR_LOG)
 	icepack $(PNR_ASC) $(PNR_BIN)
