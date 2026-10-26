@@ -374,3 +374,27 @@ Tool versions recorded on this host: Python 3.12.8, NVC 1.23.0, GHDL 6.0.0
 `Version` without a number from its `--version` command (a real route banner is
 needed for a complete version record), Ruby 2.6.10p210, and Git 2.54.0. The
 baseline did not run synthesis or place-and-route.
+
+### GPIO_IN deterministic schedule work
+
+The golden model now accepts `gpio_schedule=[(cycle, value), ...]`; the CLI
+accepts `--gpio-schedule` with `cycle value` lines and `#` comments. The last
+scheduled value holds. Reads use the input at cycle `c-2`; a read before cycle
+2 sees reset value 0. The model default pin value is represented as the cycle-0
+schedule value, preserving static-pin callers after the two synchronization
+edges.
+
+Hand-derived check table (program read cycles are counted from cycle 0):
+
+| LOAD cycle c | pin schedule cycle c-2 | expected GPIO_IN |
+|---:|---:|---:|
+| 1 | before cycle 0 | 0x00 (reset) |
+| 3 | 1 | 0x10 |
+| 4 | 2 | 0x20 |
+| 6 | 4 | 0x40 |
+
+`tools/test_isa_sim.py` runs a directed program against this schedule and all
+four values matched. `make test` passed after the model/spec change. The RTL
+still has its existing component-level two-edge GPIO test and constant-input
+CPU test; a file-driven schedule in the RTL CPU harness and randomized schedule
+I/O differential mode have not yet been added or run.

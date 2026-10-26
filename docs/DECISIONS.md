@@ -11,3 +11,4 @@
 |---|---|---|
 | 4C-D1 | Keep the BRAM LOAD-stall implementation on `exp-bram`; do not promote it to `main` without a verified default-mode equivalence run and complete comparative results. | The existing experiment changes LOAD timing and MMIO sampling. Its branch report records these semantic changes; the mainline baseline remains the single-cycle design. |
 | 4C-D2 | Treat board debug-port cost as an implementation question, not an assumption. | `fpga_top.vhd` already instantiates `cpu_top` with `DEBUG => false` and leaves all `dbg_*` outputs open. A route and netlist inspection are required before attributing board resources or timing to those ports. |
+| 4C-D3 | Model GPIO_IN from an explicit cycle schedule with two-cycle latency and reset-to-zero. | The hand-derived table and model test establish `read(c) = input(c-2)`; static `gpio_in` callers retain their held pin value from cycle 0. |

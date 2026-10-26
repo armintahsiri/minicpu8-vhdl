@@ -306,8 +306,15 @@ the CPU clock and there are no interrupts.
 
 - `GPIO_OUT` is a plain 8-bit register, readable back, reset to `0x00`.
 - `GPIO_IN` is asynchronous at the FPGA pin. It passes through a **two-flop
-  synchronizer** before the CPU can read it, so a pin change becomes visible
-  after two rising clock edges. Writes to `GPIO_IN` are ignored.
+  synchronizer**. For a CPU `LOAD GPIO_IN` executing in cycle `c`, the value
+  sampled is the external pin value scheduled at cycle `c-2`; a changed value
+  becomes visible after two rising clock edges. Schedule changes
+  are sampled on rising edges, and the last scheduled value holds. The initial
+  and reset value of both synchronizer stages is `0x00`, so reads during the
+  first two cycles after reset observe `0x00`. Writes to `GPIO_IN` are ignored.
+  Golden-model and test schedules use whitespace-separated `cycle value`
+  pairs, starting at cycle 0 (base-0 integers are accepted; comments begin
+  with `#`).
 
 ### Cycle counter (`0xF4`)
 
