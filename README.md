@@ -4,8 +4,11 @@
 An educational 8-bit **single-cycle CPU** written in VHDL-2008. It includes
 memory-mapped UART and GPIO, two-simulator verification, differential fuzzing,
 mutation checks, FPGA constraints and a hardware bring-up plan. The RTL and
-programs are simulation-verified; no bitstream has been programmed on a
-physical FPGA.
+programs are simulation-verified. Phase 4C work is in progress: the recorded
+baseline passed both simulators and fuzz suites, the updated NVC suite passed,
+and a local HX8K hello design synthesized and routed at seed 1 / 12 MHz. This
+is tool evidence only; no bitstream has been programmed and no behavior has
+been verified on physical hardware.
 
 The ISA itself is unchanged from Phase 2. `docs/ISA.md` is the normative
 specification and is mechanically cross-checked against the hardware,
