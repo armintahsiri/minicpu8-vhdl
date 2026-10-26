@@ -14,3 +14,12 @@
 | 4C-D3 | Model GPIO_IN from an explicit cycle schedule with two-cycle latency and reset-to-zero. | The hand-derived table and model test establish `read(c) = input(c-2)`; static `gpio_in` callers retain their held pin value from cycle 0. |
 | 4C-D4 | Keep synthesis outside CI and expose it through the documented `make synth-check` flow. | Local synthesis completed; CI remains a simulation regression and the workflow YAML was only parsed locally. |
 | 4C-D5 | Count only actual simulation failures or differential mismatches as mutation detections. | The prior classifier could label fuzz as the detector merely because fuzz ran; the corrected 36-case checker-excluded sweep reports 36/36 directed simulation detections. |
+
+## Phase 5 decisions
+
+| ID | Decision | Evidence and rationale |
+|---|---|---|
+| 5-D1 | Keep the default board wrapper at `DEBUG=false`; keep the experimental LOAD-stall design on `exp-bram`. | `fpga_top` leaves all debug ports open, and the `DEBUG=true` measurement also kept them open. No hardware debug interface was verified. LOAD_STALL changes instruction timing and remains isolated. |
+| 5-D2 | Remove only synthesized `$assert` cells in the derived PNR JSON before nextpnr. | Yosys 0.70+post includes a `$assert` cell that nextpnr-ice40 rejects as unsupported. PNR proceeds after deleting that non-hardware check cell; RTL and synthesized functional logic are unchanged. |
+| 5-D3 | Require GPIO schedule I/O fuzz to compare NVC and GHDL against one parsed schedule. | The custom and seeded random schedules passed all three implementations with no state mismatches; read timing varies across generated programs. |
+| 5-D4 | Keep pin candidates unverified until physical measurements exist. | No board or USB serial route was detected, so reset, UART, GPIO, and PCF continuity were not measured. |

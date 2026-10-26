@@ -483,3 +483,107 @@ NVC and GHDL reported all benches passed; the 200-program ALU/RAM and
 the normal checker-enabled target. The enclosing wall time was 113.45 s on this
 host. This is local verification only; the GitHub Actions workflow is
 unverified until a push triggers it.
+
+### Phase 5 — GPIO schedule, implementation sweep, and bring-up status
+
+The shared `cycle value` GPIO schedule parser is used by the ISA model and by
+the generated RTL I/O-fuzz bench (`--gpio-schedule`). `iofuzz` creates a
+deterministic random schedule from its seed and passes the same values to the
+model, NVC, and GHDL. GPIO read timing varies across the I/O programs through
+their different polling and delay paths. The hand-derived contract remains
+`LOAD at c -> input scheduled at c-2`; schedule values hold until the next
+entry. A cycle-0 value seeds the external pin schedule, while the synchronizer
+stages themselves reset to zero.
+
+Boundary checks were added for transitions at c-1, c, and c+1 relative to a
+LOAD at cycle c. Each read sees the previous value because the input consumed
+is from c-2; later reads see the transitioned value after the two-edge delay.
+The existing hand table in this report checks reads at c=1, 3, 4, and 6 for
+schedule values 0x10, 0x20, and 0x40. An 8-program custom-schedule test passed
+in NVC and GHDL with 0 mismatches; an 8-program randomized-schedule test also
+passed in both simulators with 0 mismatches. The full seeded 40-program run is
+recorded under final verification below.
+
+#### Debug and route sweep
+
+The normal board wrapper sets `DEBUG=false` and connects `dbg_pc`,
+`dbg_flags`, `dbg_regs`, and `dbg_ram` to `open`. Both the false and true
+generic builds had five physical top-level ports; no debug output is exposed
+at a board pin. For comparison, the `DEBUG=true` wrapper was synthesized with
+those same debug outputs open. This is a comparison of the RAM debug-view
+generic, not a physically observable debug interface.
+
+Tools: Yosys 0.70+post (git 0c11ea09), GHDL 6.0.0, and nextpnr-ice40. The
+nextpnr executable's own `--version` output is `Version ` with no number, and
+the route log has no version banner, so the nextpnr version is unavailable.
+The generated synthesis JSON contains a `$assert` cell that this nextpnr does
+not support. The PNR flow now derives `fpga_top_pnr.json` by deleting only
+that synthesis assertion cell; the source RTL and functional netlist are not
+changed. Synthesis LC totals are from nextpnr packing; FF totals count the
+synthesized `SB_DFF*` cells; BRAM counts are `ICESTORM_RAM`.
+
+| Build generic | Device | LC | FF | BRAM | Routed Fmax by seed (MHz) | Route result |
+|---|---:|---:|---:|---:|---|---:|
+| DEBUG=false (board) | HX8K | 4491 | 2035 | 0 | 1: 36.26, 2: 39.83, 3: 38.15, 4: 41.60, 5: 39.20, 6: 38.35, 7: 39.82, 8: 39.94 | 8/8 |
+| DEBUG=false (board) | UP5K | 4491 | 2035 | 0 | 2: 15.44, 3: 14.78, 8: 14.93 | 3 از 8 |
+| DEBUG=true (outputs open) | HX8K | 4350 | 2033 | 0 | 1: 37.95, 2: 39.02, 3: 37.34, 4: 39.02, 5: 38.32, 6: 37.77, 7: 38.72, 8: 36.81 | 8/8 |
+| DEBUG=true (outputs open) | UP5K | 4350 | 2033 | 0 | 1: 14.70, 2: 14.65, 5: 13.87 | 3 از 8 |
+
+All routes used the hello program, 12 MHz target, existing board PCFs, and
+seeds 1 through 8. Failed UP5K seeds did not complete legal placement. In the
+false build they were 1, 4, 5, 6, and 7; in the true build they were 3, 4, 6,
+7, and 8. Failed runs have no Fmax result and are not included in the routed
+Fmax lists. UP5K is therefore reported as `3 از 8` for each build.
+
+The successful HX8K seed-1 critical path starts at a `core.dbg_pc` state bit
+and ends at a `core.dbg_regs` register-file state bit, crossing the condition
+logic and UART busy logic. This is architectural PC/register state; the
+`dbg_*` output ports themselves remain open. The seed-1 12 MHz and 24 MHz
+target runs produced byte-identical ASC placement/routing files and the same
+36.26 MHz routed Fmax, so the changed target had no observed placement effect
+for this seed. This is a single-seed observation, not a general timing claim.
+
+#### Physical bring-up and CI
+
+No Lattice/FTDI USB device or USB serial interface was found in the host USB
+inventory on 2026-10-26. `iceprog` is installed, but there is no evidence of a
+connected board. Reset, UART, and GPIO self-test were therefore not run.
+Candidate PCF assignments in `constraints/hx8k_breakout.pcf` and
+`constraints/icebreaker.pcf` remain `UNVERIFIED`; see `docs/BRINGUP.md` for
+their source references and wiring plan.
+
+The workflow YAML parses with Ruby's `YAML.load_file`. The local suite is not
+a GitHub Actions run. Actions status for `main`, tag `p4c-final`, and
+`exp-bram` could not be retrieved because `gh` is not installed and the
+available web endpoint did not expose the repository Actions API. Pinned
+GHDL 6.0.0/NVC 1.23.0, step timeouts, START/PASS messages, and action versions
+were left intact; `synth-check` remains outside CI. No tracked generated junk
+was found. The LOAD_STALL experiment remains isolated to `exp-bram`.
+
+#### Final Phase 5 verification
+
+On 2026-10-26 the final main worktree passed:
+
+```sh
+make clean && make test && make test-ghdl && make fuzz && make iofuzz \
+  && make gpio-schedule-check && make mutation
+```
+
+NVC and GHDL testbench suites passed, `make fuzz` passed 200 programs with 0
+mismatches, `make iofuzz` passed 40 programs with 0 mismatches against both
+NVC and GHDL, all three directed schedule boundary programs matched the
+hand-derived expected registers in both simulators, and mutation detected
+36/36 cases. `make synth-check` passed. The HX8K seed-1 `make pnr` command
+passed after the derived-JSON assertion filter; both complete device sweeps
+are in the route table above.
+
+The `exp-bram` ref at `d327db0` was exported to a temporary read-only source
+snapshot (the branch itself was not modified). Its clean NVC and GHDL suites,
+200-program fuzz, 40-program I/O fuzz, and 36/36 mutation suite all passed.
+No LOAD_STALL source or generated file was copied into main.
+
+Local versions: Python 3.12.8, NVC 1.23.0, GHDL 6.0.0, Yosys 0.70+post,
+Ruby 2.6.10p210, and Git 2.54.0. nextpnr-ice40 printed an empty version value
+both for `--version` and in the route logs, so no version number can be
+reported. No GitHub Actions status was observed; local workflow YAML parsing
+is not a CI result.

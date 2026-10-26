@@ -4,11 +4,12 @@
 An educational 8-bit **single-cycle CPU** written in VHDL-2008. It includes
 memory-mapped UART and GPIO, two-simulator verification, differential fuzzing,
 mutation checks, FPGA constraints and a hardware bring-up plan. The RTL and
-programs are simulation-verified. Phase 4C work is in progress: the recorded
-baseline passed both simulators and fuzz suites, the updated NVC suite passed,
-and a local HX8K hello design synthesized and routed at seed 1 / 12 MHz. This
-is tool evidence only; no bitstream has been programmed and no behavior has
-been verified on physical hardware.
+programs are simulation-verified. Phase 5 closes the remaining GPIO schedule
+validation and local implementation sweep: NVC/GHDL schedule fuzzing passed,
+HX8K routed for all eight seeds, and UP5K routed for 3 of 8 seeds. These are
+tool results only; no bitstream has been programmed and no behavior has been
+verified on physical hardware. See [`docs/AUDIT.md`](docs/AUDIT.md) for exact
+results and limitations.
 
 The ISA itself is unchanged from Phase 2. `docs/ISA.md` is the normative
 specification and is mechanically cross-checked against the hardware,

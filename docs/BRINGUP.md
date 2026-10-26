@@ -5,6 +5,12 @@ testbench behavior have been simulated, but no board has been programmed or
 measured during this phase. Pin assignments are candidates until confirmed on
 the exact board revision.
 
+Hardware availability was checked on 2026-10-26: no Lattice/FTDI USB device or
+USB serial path was present in the host USB inventory, so physical bring-up
+was not run. `iceprog` is installed, but that alone does not establish that a
+board is connected. Keep every PCF assignment marked `UNVERIFIED` until the
+corresponding board revision is wired and tested.
+
 ## Recommended first board
 
 Start with the **Lattice iCE40-HX8K Breakout Board** (HX8K-CT256). Its larger
