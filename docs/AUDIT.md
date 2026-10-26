@@ -352,3 +352,25 @@ make clean && make test && make test-ghdl && make fuzz && make iofuzz && make mu
 All NVC and GHDL testbenches passed; the 200-program ALU/RAM and 40-program
 I/O differential fuzz runs had zero mismatches; and all 23 RTL mutations were
 detected. `p4b-final` marks this verified `main` state. No push was performed.
+
+## Phase 4C baseline (2026-10-26)
+
+Before edits, the working tree was clean on `main` at `p4b-final`; `exp-bram`
+existed and the configured identity was Armin Tahsiri <itsarmintahsiri@gmail.com>.
+A create/delete write probe succeeded. No files were changed by the probe.
+
+Baseline command: `make clean && make test && make test-ghdl && make fuzz && make iofuzz && make mutation`.
+Every command exited successfully. The observed wall times from `/usr/bin/time -p`
+were: clean 0.06 s, `make test` 9.09 s, `make test-ghdl` 13.87 s, `make fuzz`
+0.87 s, `make iofuzz` 0.50 s, and `make mutation` 55.00 s (about 79.4 s total,
+excluding command startup). The NVC and GHDL benches passed; full ALU/RAM fuzz
+reported 200 programs and 0 mismatches; full I/O fuzz reported 40 programs and
+0 mismatches; baseline mutation detection was 23/23. Mutations 10, 11, 12, 13,
+and 21 were caught in the consistency/diversity precheck; mutation 17 was
+caught only by quick fuzz. These are the gaps Phase 4C must close.
+
+Tool versions recorded on this host: Python 3.12.8, NVC 1.23.0, GHDL 6.0.0
+(6.0.0.r0.ge589c698c), Yosys 0.70+post (git 0c11ea09), nextpnr-ice40 reports
+`Version` without a number from its `--version` command (a real route banner is
+needed for a complete version record), Ruby 2.6.10p210, and Git 2.54.0. The
+baseline did not run synthesis or place-and-route.
