@@ -468,3 +468,18 @@ counter reset/wrap, per-instruction-class flag controls, CMP write suppression,
 BEQ field selection, PC wrap, and HALT PC freeze. `check_consistency.py` remains
 as a supplementary source-level cross-check, not the only detector for these
 properties.
+
+### Final Phase 4C mainline regression
+
+On the final `main` source state before branch integration, the requested clean
+chain completed successfully:
+
+```sh
+make clean && make test && make test-ghdl && make fuzz && make iofuzz && make mutation
+```
+
+NVC and GHDL reported all benches passed; the 200-program ALU/RAM and
+40-program I/O fuzz runs had 0 mismatches; all 36 mutations were detected in
+the normal checker-enabled target. The enclosing wall time was 113.45 s on this
+host. This is local verification only; the GitHub Actions workflow is
+unverified until a push triggers it.
